@@ -1,0 +1,212 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Environments
+.env
+.env.local
+.env.*.local
+.venv
+env/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# mypy
+.mypy_cache/
+
+# Ruff
+.ruff_cache/
+
+# =============================================================================
+# Config (may contain secrets) - MUST NOT UPLOAD
+# =============================================================================
+config.yaml
+*.local.yaml
+secrets/
+credentials/
+*.pem
+*.key
+*.p12
+
+# =============================================================================
+# Logs and temporary files
+# =============================================================================
+logs/
+log/
+*.log
+tmp/
+temp/
+*.tmp
+*.bak
+*.bak.*
+
+# =============================================================================
+# Data directories (may contain sensitive data)
+# =============================================================================
+data/
+.memory/
+.memory_test/
+.tool_outputs/
+output/
+results/
+*.db
+*.sqlite
+*.sqlite3
+
+# =============================================================================
+# OS generated files
+# =============================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# =============================================================================
+# Docker
+# =============================================================================
+*.tar.gz
+*.tar
+*.zip
+
+# =============================================================================
+# Sensitive documentation (not for GitHub)
+# =============================================================================
+MEMORY.md
+FRAMEWORK_ANALYSIS.md
+PROJECT_DOCUMENTATION.md
+OPEN_SOURCE_TOOLS.md
+README_GITHUB.md
+
+# =============================================================================
+# Development plans (not for GitHub)
+# =============================================================================
+docs/IMPLEMENTATION_PLAN.md
+docs/TOOL_OUTPUT_PLAN.md
+docs/TOOL_OUTPUT_FIX_PLAN.md
+靶机wp/
+writeups/
+solutions/
+*.wp.md
+
+# =============================================================================
+# Test outputs
+# =============================================================================
+test_output/
+test_results/
+.pytest_cache/
+test_suite/output/
+logs/test_results_*.json
+
+# =============================================================================
+# Claude Code memory
+# =============================================================================
+.claude/
+
+# =============================================================================
+# RAG / Vector DB
+# =============================================================================
+chroma_db/
+rag_builder/index/
+*.index
+
+# =============================================================================
+# Session and cache files
+# =============================================================================
+sessions/
+*.session
+*.cache
+
+# =============================================================================
+# Attack results (may contain sensitive data)
+# =============================================================================
+attack_results/
+scan_results/
+exploit_output/
+
+# =============================================================================
+# Binary tools (large files, download separately)
+# =============================================================================
+tools/binaries/*.exe
+tools/binaries/*.elf
+tools/binaries/fscan
+tools/binaries/frp
+tools/linux/fscan
+tools/linux/frpc
+tools/linux/frps
+tools/windows/*.exe
+
+# =============================================================================
+# Thirdparty - 标注进度与大文件库
+# =============================================================================
+thirdparty/ANNOTATION_*.md
+thirdparty/PayloadsAllTheThings-4.2/
+thirdparty/SecLists-master/
+thirdparty/nuclei-templates-10.4.0/
+thirdparty/chatgpt-prompts-library/

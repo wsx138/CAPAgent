@@ -1,0 +1,293 @@
+# app/state_v2.py
+"""
+状态管理 V2 - 组合模式
+
+将分散的状态类型组合为统一的 CTFState，同时保持向后兼容。
+
+设计原则:
+- 组合不继承：CTFState 由各场景状态组合而成
+- 字段去重：公共字段只保留一份
+- 向后兼容：现有代码无需修改
+"""
+
+from typing import Annotated, List, Dict, Literal, Any, Optional
+from typing_extensions import TypedDict
+import operator
+
+# 从 state_types 导入类型定义
+from state_types.base import BaseCTFState
+from state_types.web import (
+    WebCTFState, VulnerabilityCandidate, AttackAction,
+    PageFeatures, Hint, ToolCall, NodeAttackStatus
+)
+from state_types.internal_network import (
+    InternalNetworkState, InternalHost, Credential, LateralMove
+)
+# 导入所有预定义的 reducer
+from state_types.reducers import (
+    visited_urls_reducer,
+    visited_fingerprints_reducer,
+    attack_results_reducer,
+    tool_calls_reducer,
+    failed_payloads_reducer,
+    credentials_reducer,
+    internal_hosts_reducer,
+    cap_candidates_reducer,
+    merge_dict_reducer,
+    dedupe_list_reducer,
+    _make_cap_reducer,
+)
+
+# 创建带特定上限的 reducer
+_cap_50_reducer = _make_cap_reducer(50)
+_cap_100_reducer = _make_cap_reducer(100)
+
+
+class CTFStateV2(TypedDict):
+    """
+    CTF 状态 V2 - 组合模式
+
+    字段分类:
+    - [B] Base: 基础字段（来自 BaseCTFState）
+    - [W] Web: Web CTF 字段
+    - [I] Internal: 内网渗透字段
+    """
+    # =====================================================
+    # [B] 基础字段 - 所有场景共用
+    # =====================================================
+    task_name: str
+    task_description: str
+    target_url: str
+    current_url: str
+    start_time: float
+    current_round: int
+    execution_steps: int
+    current_mode: Literal['exploit', 'explore', 'innovate', 'end']
+    failure_weighted_score: float
+    exploration_rounds: int
+    rule_miss_count: int
+    found_flag: bool
+    final_flag: str
+    visited_urls: Annotated[List[str], visited_urls_reducer]
+    scanned_ips: Annotated[List[str], dedupe_list_reducer]
+    scanned_urls: Annotated[List[str], dedupe_list_reducer]
+    attachments: List[Dict[str, Any]]
+
+    # =====================================================
+    # [W] Web CTF 字段
+    # =====================================================
+    page_features: PageFeatures
+    raw_html_snippet: str
+    baseline_response: Dict[str, Any]
+    page_history: Dict[str, Dict[str, Any]]
+    detected_scenes: Dict[str, Any]
+    site_topology: Annotated[Dict[str, List[str]], merge_dict_reducer]
+    node_metadata: Annotated[Dict[str, Dict], merge_dict_reducer]
+    critical_nodes: List[str]
+    attack_paths: List[List[str]]
+    topology_priority: List[tuple]  # 拓扑优先级: [(url, score), ...]
+    visited_fingerprints: Annotated[List[str], visited_fingerprints_reducer]
+    vuln_candidates: Annotated[List[VulnerabilityCandidate], cap_candidates_reducer]
+    permanent_rules: Annotated[List[Dict], _cap_50_reducer]
+    tool_cache: Annotated[Dict[str, Any], merge_dict_reducer]
+    attack_batch: List[AttackAction]
+    attack_results: Annotated[List[Dict], attack_results_reducer]
+    tool_calls: Annotated[List[ToolCall], tool_calls_reducer]
+    latest_tactical_guidance: Optional[str]
+    analyst_intel: Optional[str]
+    failed_payloads: Annotated[List[str], failed_payloads_reducer]
+    hint_level: int
+    hint_history: Annotated[List[Hint], operator.add]
+    last_intervention_step: int
+    rag_context: List[str]
+    temp_rules: List[Dict]
+    success_trace: List[Dict]
+    node_attack_status: Dict[str, NodeAttackStatus]
+    successful_exploits: List[Dict]
+
+    # =====================================================
+    # [W] 场景聚焦字段 (用于深度攻击)
+    # =====================================================
+    known_facts: str  # 已知事实，由 verifier 积累
+    focused_scene: str  # 当前聚焦场景，如 "Spring", "Tomcat/9.0.30"
+    scene_attack_attempts: int  # 当前场景攻击尝试次数
+    scene_exhausted: bool  # 当前场景是否已穷尽
+
+    # =====================================================
+    # [I] 内网渗透字段
+    # =====================================================
+    internal_mode: bool  # 是否处于内网渗透模式
+    internal_network_detected: bool
+    internal_network_range: str
+    internal_hosts: Annotated[List[InternalHost], internal_hosts_reducer]
+    credentials: Annotated[List[Credential], credentials_reducer]
+    lateral_moves: List[LateralMove]
+    domain_info: Dict[str, Any]
+    shell_session: Optional[Dict[str, Any]]
+    active_sessions: List[Dict[str, Any]]
+    tunnel_established: bool
+    socks5_port: int
+    uploaded_tools: List[str]
+    privilege_level: str
+    pivot_host: str  # 跳板机IP
+    proxy_info: Optional[Dict[str, Any]]  # SOCKS5代理信息
+    upload_status: str  # 工具上传状态: pending/completed/commands_generated/failed
+    tunnel_status: str  # 隧道状态: pending/configured/failed
+    post_exploit_status: str  # 后渗透状态: no_shell/ready_for_internal/web_only
+    current_internal_target: str  # 当前内网目标IP
+
+    # [I] 内网渗透 - AD域字段
+    domain_controller: str  # 域控IP
+    ad_domain: str  # AD域名
+    ad_users: Annotated[List[str], dedupe_list_reducer]
+    ad_groups: Annotated[List[str], dedupe_list_reducer]
+    ad_computers: Annotated[List[str], dedupe_list_reducer]
+    ad_trusts: Annotated[List[Dict], dedupe_list_reducer]
+    lateral_movement_paths: Annotated[List[Dict], dedupe_list_reducer]
+
+    # =====================================================
+    # [W] 漏洞利用增强字段
+    # =====================================================
+    exploit_keywords: Dict[str, Any]  # 检索关键词: {cve_ids, framework, version, tags}
+    tried_payloads: Annotated[List[str], dedupe_list_reducer]  # 已尝试的payload
+    continue_attack: bool  # 是否继续攻击
+    remaining_payloads: List[Dict[str, Any]]  # 待尝试的payload列表
+
+    # =====================================================
+    # [I] 内网渗透扩展字段 - 多主机Flag搜索
+    # =====================================================
+    found_flags: Annotated[List[str], dedupe_list_reducer]  # 所有发现的flag
+    compromised_hosts: Annotated[List[str], dedupe_list_reducer]  # 已攻陷的主机IP
+    current_compromise_phase: str  # 当前阶段: flag_search/lateral_move/complete
+    persistence_established: bool  # 是否已建立持久化
+    persistence_results: List[Dict[str, Any]]  # 持久化结果记录
+
+    # =====================================================
+    # [C] 云安全字段
+    # =====================================================
+    cloud_mode: bool
+    cloud_provider: str  # aws/azure/gcp/alibaba/tencent
+    metadata_leaked: Dict[str, Any]
+    iam_roles: Annotated[List[str], dedupe_list_reducer]
+    temp_credentials: Annotated[List[Dict], dedupe_list_reducer]
+    buckets_found: Annotated[List[str], dedupe_list_reducer]
+    escalation_paths: Annotated[List[str], dedupe_list_reducer]
+    cloud_phase: str  # recon/enum/exploit/escalate/complete
+
+    # =====================================================
+    # [A] AI安全字段
+    # =====================================================
+    ai_mode: bool
+    target_model: str  # openai/anthropic/deepseek
+    target_endpoint: str
+    detected_ai_type: str
+    prompt_injection_success: bool
+    jailbreak_success: bool
+    successful_payloads: Annotated[List[str], dedupe_list_reducer]
+    leaked_system_prompt: str
+    ai_phase: str  # detect/probe/exploit/exfiltrate/complete
+
+    # =====================================================
+    # [Crypto] 密码学 CTF 字段
+    # =====================================================
+    crypto_mode: bool
+    crypto_analysis: Dict[str, Any]
+    identified_ciphertexts: List[Dict[str, Any]]
+    decrypted_data: List[str]
+    potential_flags: List[str]
+    rsa_params: Dict[str, Any]
+    classical_cipher_hints: List[str]
+
+    # =====================================================
+    # [Pwn] 二进制漏洞利用字段
+    # =====================================================
+    pwn_mode: bool
+    binary_path: str
+    binary_info: Dict[str, Any]
+    vulnerabilities: List[Dict[str, Any]]
+    exploit_script: str
+    exploit_info: Dict[str, Any]
+    pwn_analysis: Dict[str, Any]
+
+    # =====================================================
+    # [Reverse] 逆向工程字段
+    # =====================================================
+    reverse_mode: bool
+    reverse_info: Dict[str, Any]
+    decompiled_code: str
+    algorithm_type: str
+    key_findings: str
+    functions: List[Dict[str, Any]]
+    extracted_strings: List[str]
+
+    # =====================================================
+    # [Misc] 杂项 CTF 字段
+    # =====================================================
+    misc_mode: bool
+    misc_file: str
+    file_info: Dict[str, Any]
+    steg_results: Dict[str, Any]
+    media_analysis: Dict[str, Any]
+    misc_analysis: Dict[str, Any]
+    extracted_data: List[Any]
+    embedded_files: List[str]
+
+
+# 向后兼容别名
+CTFState = CTFStateV2
+
+
+def get_default_state(task_name: str, task_description: str, target_url: str) -> dict:
+    """
+    从类型注解自动生成默认状态
+
+    Args:
+        task_name: 任务名称
+        task_description: 任务描述
+        target_url: 目标URL
+
+    Returns:
+        包含所有字段默认值的字典
+    """
+    import time
+    from typing import get_origin, get_args
+
+    # 基本类型默认值映射
+    defaults = {
+        str: "",
+        int: 0,
+        float: 0.0,
+        bool: False,
+    }
+
+    state = {}
+
+    for field_name, field_type in CTFStateV2.__annotations__.items():
+        origin = get_origin(field_type)
+        if origin is Annotated:
+            inner_type = get_args(field_type)[0]
+        else:
+            inner_type = field_type
+
+        # 处理容器类型
+        if inner_type == list or (hasattr(inner_type, '__origin__') and inner_type.__origin__ == list):
+            state[field_name] = []
+        elif inner_type == dict or (hasattr(inner_type, '__origin__') and inner_type.__origin__ == dict):
+            state[field_name] = {}
+        elif inner_type in defaults:
+            state[field_name] = defaults[inner_type]
+        else:
+            # Optional或其他类型默认为None
+            state[field_name] = None
+
+    # 覆盖必需字段
+    state.update({
+        "task_name": task_name,
+        "task_description": task_description,
+        "target_url": target_url,
+        "current_url": target_url,
+        "start_time": time.time(),
+        "current_mode": "exploit",
+    })
+
+    return state
