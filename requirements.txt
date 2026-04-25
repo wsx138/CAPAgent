@@ -25,7 +25,7 @@ sentence-transformers>=2.2.0
 
 # Security Tools Integration
 pwn>=1.0.0  # pwntools
-impacket>=0.11.0
+impacket>=0.13.0
 bloodhound>=1.0.0
 defusedxml>=0.7.0  # dirsearch依赖
 
