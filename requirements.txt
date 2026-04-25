@@ -30,7 +30,7 @@ bloodhound>=1.0.0
 defusedxml>=0.7.0  # dirsearch依赖
 
 # Database
-redis>=5.0.0
+redis>=7.4.0
 
 # Logging
 colorlog>=6.0.0
