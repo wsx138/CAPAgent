@@ -38,7 +38,7 @@ rich>=13.0.0
 
 # Optional - Crypto
 pycryptodome>=3.20.0
-gmpy2>=2.1.0
+gmpy2>=2.3.0
 
 # Optional - Misc
 Pillow>=10.0.0
