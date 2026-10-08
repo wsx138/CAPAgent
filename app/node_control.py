@@ -41,6 +41,8 @@ class NodeControl:
         # 核心节点 - 始终启用
         "challenge_type_detector", "recon", "analyst", "strategy_filter",
         "mode_manager", "attacker", "verifier", "explorer", "innovator", "evolution",
+        # 黑板聚合节点（仅 ENABLE_BOARD=true 时会被注册进图）
+        "board",
         # 内网渗透节点
         "internal_recon", "lateral_move", "privilege_escalation",
         "persistence", "credential_gather", "flag_search",
@@ -60,6 +62,7 @@ class NodeControl:
     NODE_GROUPS = {
         "core": ["challenge_type_detector", "recon", "analyst", "strategy_filter",
                  "mode_manager", "attacker", "verifier", "explorer", "innovator", "evolution"],
+        "board": ["board"],
         "internal": ["internal_recon", "lateral_move", "privilege_escalation",
                      "persistence", "credential_gather", "flag_search",
                      "post_exploit", "upload_tools", "setup_tunnel"],

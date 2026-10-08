@@ -267,6 +267,37 @@ class Config:
     RAG_FOR_WEB_ONLY: bool = True
 
     # =========================================================================
+    # 黑板架构配置（渐进式改造，见实施计划）
+    # =========================================================================
+
+    # 总开关。**关闭时行为与改造前逐字节一致**（facts 不写入，读侧投影自动
+    # 回退到旧的 known_facts 字段）。Phase 2 默认关闭，验证无误后再开。
+    ENABLE_BOARD: bool = False
+
+    # 路由覆盖开关（Phase 3）。开启后黑板可用图分析结果覆盖 exploit 模式下的
+    # 下一个节点选择。默认关闭。
+    ENABLE_BOARD_ROUTING: bool = False
+
+    # 技能目录。留空则使用默认的 {项目根}/skills
+    SKILLS_DIR: str = ""
+
+    # facts 通道容量上限，防止累积过多拖慢 checkpoint 序列化
+    BOARD_MAX_FACTS: int = 200
+
+    # 注入 prompt 的 facts 条数上限
+    BOARD_PROMPT_TOP_N: int = 40
+
+    # 路由覆盖冷却步数。防止 attacker<->explorer 抖动被 RouteGuard 判定成死循环
+    # （见 app/router.py 的 RouteGuard 规则: 同一节点 >10 次 / A->B->A 连续 3 次）
+    BOARD_OVERRIDE_COOLDOWN: int = 6
+
+    # 黑板允许的 LLM 调用预算（每任务）。超出后只用规则/图分析，不再额外调模型
+    BOARD_LLM_BUDGET: int = 3
+
+    # 技能匹配模式: "rule"（默认，纯规则）| "hybrid"（规则无结果时向量兜底）
+    SKILL_MATCH_MODE: str = "rule"
+
+    # =========================================================================
     # 模型配置 - 不同任务使用不同模型
     # =========================================================================
 

@@ -7,10 +7,15 @@ BASE64_PATTERN = re.compile(r'[A-Za-z0-9+/]{20,}={0,2}')
 
 def get_verifier_prompt(attack_batch: list, results: list, analyst_intel: str = None,
                         node_info: dict = None, known_facts: str = None,
-                        human_hint: str = None) -> str:
+                        human_hint: str = None, enable_board: bool = False) -> str:
     """
     构建核验兵的 Prompt [P3合并版]
     合并了原verifier和reflector的职责，一次LLM调用完成所有判断
+
+    Args:
+        enable_board: 是否要求输出结构化事实（黑板模式）。
+                      **默认 False 时 prompt 逐字节与改造前一致**，
+                      保证 ENABLE_BOARD=false 的行为完全不变。
     """
     formatted_results = []
     for i, res in enumerate(results):
@@ -80,6 +85,35 @@ def get_verifier_prompt(attack_batch: list, results: list, analyst_intel: str = 
 请根据以上人工指导调整战术建议和攻击方向。
 """
 
+    # 黑板扩展: 仅在 ENABLE_BOARD 开启时要求结构化事实输出
+    # （关闭时这段为空字符串，prompt 与改造前逐字节一致）
+    board_extra = ""
+    if enable_board:
+        board_extra = """
+## 结构化事实（黑板）
+
+除上面的字段外，额外把本轮**客观确认**的发现整理成结构化事实，供后续轮次复用：
+
+- 只记录**已确认**的客观结论，不要记录推测或计划
+- `kind` 只能取以下之一：
+  `credential`(凭据) / `vuln`(已确认漏洞) / `access`(获得访问能力) /
+  `tech`(技术栈) / `path`(敏感路径) / `input_point`(可控输入点) /
+  `data_pattern`(数据特征) / `asset`(资产) / `deadend`(已证伪的方向)
+- `key` 是同类下的短唯一键（如用户名、漏洞类型+位置），用于去重
+- 若本轮没有任何新的客观发现，`new_facts` 返回空数组
+"""
+
+    # 事实输出模板片段
+    board_json_field = ""
+    if enable_board:
+        board_json_field = """,
+    "new_facts": [
+        {"kind": "credential|vuln|access|tech|path|input_point|data_pattern|asset|deadend",
+         "key": "短的稳定唯一键",
+         "description": "客观描述，不含推测",
+         "confidence": 0.0-1.0}
+    ]"""
+
     return f"""# CTF 核验官
 
 ## 任务
@@ -139,6 +173,7 @@ def get_verifier_prompt(attack_batch: list, results: list, analyst_intel: str = 
 - **continue**: 有明确进展，值得继续尝试新方法
 - **abandon**: 连续多次无实质进展、重复相同失败模式、触发热熔断
 
+{board_extra}
 ## 输出 JSON
 {{
     "found_flag": true/false,
@@ -149,6 +184,6 @@ def get_verifier_prompt(attack_batch: list, results: list, analyst_intel: str = 
     "node_decision": "continue或abandon",
     "failure_analysis": "失败原因分析（如有失败）",
     "tactical_guidance": "下一步方向性建议。如果发现新路径必须写出完整的访问URL，如：访问 http://目标/test2222222222222222.php",
-    "updated_known_facts": "发现的关键信息（如果成功）"
+    "updated_known_facts": "发现的关键信息（如果成功）"{board_json_field}
 }}
 """

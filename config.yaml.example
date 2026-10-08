@@ -83,3 +83,14 @@ SCORE_CHANGE_EXPLOIT: 0.0
 GRAPH_MAX_DEPTH: 5
 GRAPH_MAX_NODES: 1000
 GRAPH_ENABLE_VISUALIZATION: false
+
+# ===== Blackboard Configuration (黑板架构) =====
+# 渐进式改造的开关。ENABLE_BOARD 关闭时，行为与改造前完全一致。
+ENABLE_BOARD: false              # 总开关: 启用事实-意图黑板
+ENABLE_BOARD_ROUTING: false      # 允许黑板分析结果覆盖路由决策
+SKILLS_DIR: ""                   # 技能目录，留空则用默认 {项目根}/skills
+BOARD_MAX_FACTS: 200             # facts 通道容量上限
+BOARD_PROMPT_TOP_N: 40           # 注入 prompt 的事实条数
+BOARD_OVERRIDE_COOLDOWN: 6       # 路由覆盖冷却步数（防抖）
+BOARD_LLM_BUDGET: 3              # 黑板允许的额外 LLM 调用预算
+SKILL_MATCH_MODE: "rule"         # 技能匹配: rule | hybrid

@@ -4,7 +4,8 @@
 import os
 import glob
 import hashlib
-import frontmatter  # 用于解析YAML头部
+import re
+import yaml  # 解析 YAML frontmatter（原先依赖未声明的 python-frontmatter）
 from pathlib import Path
 from typing import List, Dict
 import chromadb
@@ -15,6 +16,10 @@ from rag_builder.config import (
     WRITEUPS_DIR, CHROMA_DIR, SUPPORTED_EXTENSIONS,
     EMBEDDING_MODEL, MAX_CONTENT_LENGTH
 )
+
+# frontmatter 匹配: 文件以 --- 开头，第二个 --- 之前是 YAML 元数据
+# 与 app/skills/loader.py 使用同一套解析方式，保证两处行为一致
+_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
 
 
 class VectorStoreBuilder:
@@ -37,17 +42,23 @@ class VectorStoreBuilder:
         print(f"✅ 初始化完成，向量库位置: {CHROMA_DIR}")
 
     def extract_tags(self, content: str) -> List[str]:
-        """从Markdown头部提取tags，兼容两种格式"""
+        """
+        从 Markdown 头部提取 tags，兼容两种格式
+
+        方法1 用 pyyaml 自行切分 frontmatter —— 原先依赖 python-frontmatter，
+        但该包既未写进 requirements.txt、环境中也未安装，导致本脚本无法运行。
+        """
         try:
-            # 方法1：标准YAML格式（有 ---）
+            # 方法1：标准 YAML frontmatter（--- 包裹）
             try:
-                post = frontmatter.loads(content)
-                tags = post.get('tags', [])
-                if tags:
-                    if isinstance(tags, str):
-                        return [tags]
-                    return tags
-            except:
+                m = _FRONTMATTER_RE.match(content.lstrip())
+                if m:
+                    meta = yaml.safe_load(m.group(1)) or {}
+                    if isinstance(meta, dict):
+                        tags = meta.get('tags', [])
+                        if tags:
+                            return [tags] if isinstance(tags, str) else list(tags)
+            except Exception:
                 pass
 
             # 方法2：你的格式（无 ---，直接 tags: [a, b, c]）

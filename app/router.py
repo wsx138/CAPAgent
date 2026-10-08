@@ -321,6 +321,26 @@ def route_mode(state: CTFState, current_node: str) -> str:
             logger.info("探索多轮无发现，尝试攻击模式")
             return "exploit"
 
+    # 4. 黑板路由覆盖（Phase 3，默认关闭）
+    #
+    #    只在「即将进入 exploit」时生效 —— explore/innovate/end 的语义
+    #    （探索轮次上限、失败分阈值、唯一超时终止）仍由 mode_manager 独占。
+    #    覆盖值只可能是 attacker / explorer，二者本就存在于 _mode_manager_routes，
+    #    因此图结构零改动。
+    #
+    #    ENABLE_BOARD_ROUTING=false 时整段跳过，函数行为逐字节等于改造前。
+    if next_node == "exploit" and getattr(config, "ENABLE_BOARD_ROUTING", False):
+        try:
+            from board.router_bridge import board_route_decision
+            forced = board_route_decision(state)
+            if forced:
+                logger.info(f"[Board] 黑板路由覆盖: exploit -> {forced}")
+                return forced
+        except ImportError:
+            pass  # 黑板模块不可用，静默沿用原结果
+        except Exception as e:
+            logger.debug(f"[Board] 黑板路由决策失败，沿用原结果: {e}")
+
     return next_node
 
 

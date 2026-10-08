@@ -191,6 +191,52 @@ from tools import load_all_tools
 from verifier_prompt import get_verifier_prompt
 from attacker_prompt import get_attacker_prompt
 from topology import TopologyBuilder, TopologyAnalyzer, TopologyPruner
+
+# =============================================================================
+# 黑板模块（渐进式改造 Phase 2）
+#
+# 容错导入: 黑板不可用时整个 Agent 仍能正常工作，只是没有黑板能力。
+# ENABLE_BOARD=false 时以下函数也不会被调用到（见各调用点）。
+# =============================================================================
+try:
+    from board import (
+        render_known_facts as _board_render_facts,
+        facts_from_verifier as _board_facts_from_verifier,
+        make_fact as _board_make_fact,
+        board_summary as _board_summary,
+        score_intents as _board_score_intents,
+        find_uncovered_facts as _board_find_uncovered,
+    )
+    from skills import (
+        scenes_to_facts as _board_scenes_to_facts,
+        match_skills as _board_match_skills,
+    )
+    BOARD_AVAILABLE = True
+except ImportError:  # pragma: no cover - 仅在新模块缺失时触发
+    BOARD_AVAILABLE = False
+    _board_render_facts = None
+    _board_facts_from_verifier = None
+    _board_make_fact = None
+    _board_summary = None
+    _board_score_intents = None
+    _board_find_uncovered = None
+    _board_scenes_to_facts = None
+    _board_match_skills = None
+
+
+def _render_known_facts(state) -> str:
+    """
+    读侧投影: 黑板可用且有 facts 时走黑板，否则回退到旧的 known_facts 字段
+
+    这个函数是「逐字节回退」的保证——黑板关闭 / 无 facts 时，
+    attacker 与 verifier 拿到的 known_facts 与改造前完全一致。
+    """
+    if BOARD_AVAILABLE and _board_render_facts is not None:
+        try:
+            return _board_render_facts(state)
+        except Exception:
+            pass  # 投影失败不应中断主流程，静默回退
+    return state.get("known_facts", "") or ""
 from tool_framework import ToolRegistry, CTFTool
 from topology.page_diff import page_diff_manager
 from scene_detector import SceneDetector
@@ -1143,6 +1189,23 @@ def recon_node(state: CTFState) -> Dict:
         log(f"   🎯 发现 {len(all_vuln_candidates)} 个漏洞候选，优先处理")
         # 高置信度漏洞已在 all_vuln_candidates 中，会被传递给 analyst_node
 
+    # 黑板: 把侦察到的场景特征物化为结构化事实（Phase 2）
+    # 这是技能匹配的输入源 —— 有了 tech/path/input_point 等事实，
+    # skill 的 triggers 才能对上号。
+    if config.ENABLE_BOARD and BOARD_AVAILABLE and _board_scenes_to_facts is not None:
+        try:
+            recon_facts = _board_scenes_to_facts(
+                detected_scenes,
+                url=http_url,
+                round_no=state.get("current_round", 0),
+                source="recon",
+            )
+            if recon_facts:
+                res["facts"] = recon_facts
+                log(f"   📋 黑板: 记录 {len(recon_facts)} 条侦察事实")
+        except Exception as e:
+            log(f"   ⚠️ 黑板写入失败（不影响主流程）: {e}")
+
     log_node_data("recon", {"url": url}, res)
     return res
 
@@ -1219,6 +1282,59 @@ def _ai_analyze_exploit_chain(vuln_candidates: List[Dict], page_features: Dict) 
         log(f"   [漏洞链分析] AI分析失败: {e}")
 
     return None
+
+
+def _analyst_build_intents(state: CTFState, candidates: List[Dict]) -> List[Dict]:
+    """
+    从漏洞候选 + 黑板上未被跟进的高价值事实，构造探索意图（Phase 3）
+
+    **纯规则，零 LLM 调用**——这是相比 Cairn 的一处改进: Cairn 每次态势变化都要
+    跑一次 reason LLM 任务，这里用规则先兜住显而易见的方向，把 LLM 留给真正
+    需要推理的场景。
+
+    返回的 intent 走 upsert_intents_reducer 合并（id 基于内容哈希，重复提出自动去重）。
+    """
+    if not (BOARD_AVAILABLE and config.ENABLE_BOARD and _board_make_intent):
+        return []
+
+    intents: List[Dict] = []
+    try:
+        # 1. 高置信度漏洞候选 -> 验证意图
+        for cand in (candidates or [])[:3]:
+            if not isinstance(cand, dict):
+                continue
+            try:
+                conf = float(cand.get("confidence", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if conf < 0.7:
+                continue
+            vtype = str(cand.get("type", "") or "").strip()
+            loc = str(cand.get("location", "") or "").strip()
+            if not vtype:
+                continue
+            intents.append(_board_make_intent(
+                f"验证并利用 {vtype} @ {loc or 'unknown'}",
+                sources=[f"vuln:{vtype}:{loc}"],
+                priority=min(1.0, conf),
+                cost="medium",
+            ))
+
+        # 2. 黑板上没有被任何意图跟进的高价值事实（凭据/漏洞/访问能力）
+        if _board_find_uncovered is not None:
+            for f in _board_find_uncovered(state)[:2]:
+                desc = str(f.get("description", "") or "").strip()
+                if not desc:
+                    continue
+                intents.append(_board_make_intent(
+                    f"跟进: {desc}",
+                    sources=[f.get("id")],
+                    cost="medium",
+                ))
+    except Exception:
+        return intents
+
+    return intents
 
 
 def analyst_node(state: CTFState) -> Dict:
@@ -1466,6 +1582,11 @@ def analyst_node(state: CTFState) -> Dict:
             "analyst_intel": analyst_intel,
             "exploit_keywords": exploit_keywords if exploit_keywords else {}
         }
+        # 黑板: 把候选转化成可认领的探索意图（Phase 3，纯规则零 LLM）
+        board_intents = _analyst_build_intents(state, formatted_candidates)
+        if board_intents:
+            res["intents"] = board_intents
+            log(f"   🧭 黑板: 产出 {len(board_intents)} 条探索意图")
         log_node_data("analyst", {"prompt": prompt}, res)
         return res
 
@@ -1984,9 +2105,11 @@ def attacker_node(state: CTFState) -> Dict:
         task_info=task_info,
         tactical_guidance=state.get("latest_tactical_guidance"),
         analyst_intel=state.get("analyst_intel"),
-        known_facts=state.get("known_facts", ""),
+        known_facts=_render_known_facts(state),
         failed_payloads=state.get("failed_payloads", []),
-        human_hint=human_hint
+        human_hint=human_hint,
+        # 黑板: 注入技能库里匹配到的打法（仅启用时）
+        skills=(state.get("skill_hits") or None) if config.ENABLE_BOARD else None,
     ) # 增加题目背景与战术指引
 
     try:
@@ -2497,8 +2620,9 @@ def verifier_node(state: CTFState) -> Dict:
         recent_results,
         analyst_intel=state.get("analyst_intel"),
         node_info=node_info,
-        known_facts=state.get("known_facts", ""),
-        human_hint=human_hint
+        known_facts=_render_known_facts(state),
+        human_hint=human_hint,
+        enable_board=config.ENABLE_BOARD,
     )
 
     response_text = llm_client.call_chat_completion(
@@ -2548,7 +2672,7 @@ def verifier_node(state: CTFState) -> Dict:
         # 找到FLAG
         if found_flag:
             log(f"\n   🎉 找到 FLAG: {potential_flag}")
-            return {
+            flag_result = {
                 "found_flag": True,
                 "final_flag": potential_flag,
                 "success_trace": recent_results[-1:],
@@ -2556,6 +2680,22 @@ def verifier_node(state: CTFState) -> Dict:
                 "node_attack_status": node_status,
                 "execution_steps": state.get("execution_steps", 0) + 1
             }
+            # 黑板: flag 是最高价值事实，必须记录。
+            # 这里是提前 return 路径——改造前它完全不写任何已知事实，
+            # 导致命中 flag 那一轮的全部情报丢失（既有缺陷），黑板顺带修掉。
+            if config.ENABLE_BOARD and BOARD_AVAILABLE:
+                try:
+                    _flag_facts = _board_facts_from_verifier(
+                        result,
+                        current_url=state.get("current_url", ""),
+                        round_no=state.get("current_round", 0),
+                        evidence=evidence,
+                    )
+                    if _flag_facts:
+                        flag_result["facts"] = _flag_facts
+                except Exception as _e:
+                    log(f"   ⚠️ 黑板写入失败（不影响主流程）: {_e}")
+            return flag_result
 
         # 攻击成功
         if is_exploit_successful:
@@ -2629,8 +2769,24 @@ def verifier_node(state: CTFState) -> Dict:
             except Exception as e:
                 log(f"   [!] Session detection failed: {e}")
 
+            # 黑板: 二选一写入，**不做双写**。
+            # 双写会产生两个漂移的真相源（且本函数的提前 return 路径不写
+            # known_facts，两边必然不一致）。黑板开启时只写结构化 facts；
+            # 关闭时完全保持原有的字符串累积路径，逐字节不变。
+            board_facts = None
             new_known_facts = ""
-            if updated_known_facts:
+            if config.ENABLE_BOARD and BOARD_AVAILABLE:
+                try:
+                    board_facts = _board_facts_from_verifier(
+                        result,
+                        current_url=state.get("current_url", ""),
+                        round_no=state.get("current_round", 0),
+                        evidence=evidence,
+                    ) or None
+                except Exception as _e:
+                    log(f"   ⚠️ 黑板写入失败（不影响主流程）: {_e}")
+            # 兜底: 黑板开启但没抽出结构化事实时，仍保留文本路径，避免丢情报
+            if not board_facts and updated_known_facts:
                 existing = state.get("known_facts", "")
                 new_known_facts = f"{existing}; {updated_known_facts}" if existing else updated_known_facts
 
@@ -2654,6 +2810,8 @@ def verifier_node(state: CTFState) -> Dict:
                 "node_attack_status": node_status,
                 "vuln_candidates": candidates
             }
+            if board_facts:
+                result_dict["facts"] = board_facts      # 黑板通道（走 upsert reducer 合并）
             if new_known_facts:
                 result_dict["known_facts"] = new_known_facts
             if shell_session_info:
@@ -2757,6 +2915,77 @@ def verifier_node(state: CTFState) -> Dict:
 # 6. 图编排 (Graph Orchestration)
 # ==============================================================================
 
+# ==============================================================================
+# 黑板聚合节点（渐进式改造 Phase 2）
+# ==============================================================================
+
+def board_node(state: CTFState) -> Dict:
+    """
+    [黑板] 事实-意图聚合节点
+
+    Phase 2 职责（**不参与决策**）:
+    - 重新计算 intent 优先级（图分析，无 LLM 调用）
+    - 生成 board_summary 派生视图
+
+    ⚠️ 本节点**不修改 current_mode**，因此不影响流程走向——这是 Phase 2
+    「行为不变」的保证。Phase 3 才会让它产出 intent 并影响路由。
+
+    为什么必须独立成节点: LangGraph 的节点看不见本 superstep 合并后的 state，
+    所以「增量写入」（verifier 写 facts）与「派生计算」（这里算优先级）
+    必须在不同 superstep 完成。
+    """
+    # 双保险: 图里本就没注册本节点（条件 add_node），这里再自检一次开关，
+    # 保证即使被手动调用、或未来重构后误接入，关闭态下也是 no-op。
+    if not (BOARD_AVAILABLE and config.ENABLE_BOARD):
+        return {}
+
+    try:
+        result: Dict = {}
+
+        # 1. 技能匹配（规则优先，零 LLM 调用）
+        #    技能是「打法」——告诉 attacker 什么条件下按什么步骤打。
+        #    tool_stack 是硬门槛: 技能声明的工具都不可用时直接淘汰。
+        if _board_match_skills is not None:
+            try:
+                available = set(ToolRegistry.get_tool_names())
+                matched = _board_match_skills(
+                    scenes=state.get("page_features") or {},
+                    facts=state.get("facts") or [],
+                    available_tools=available,
+                    extra_text=str(state.get("current_url", "") or ""),
+                    top_k=3,
+                )
+                if matched:
+                    # 剔除 body: Markdown 正文不进 state/prompt，供人阅读用
+                    result["skill_hits"] = [
+                        {k: v for k, v in skill.items() if k != "body"}
+                        for skill, _score in matched
+                    ]
+                    log(f"   🎯 黑板: 匹配技能 {[s['name'] for s, _ in matched]}")
+            except Exception as e:
+                log(f"   ⚠️ 技能匹配失败（不影响主流程）: {e}")
+
+        # 2. 重新算分（纯计算，零 LLM 调用，毫秒级）
+        if _board_score_intents is not None:
+            scored = _board_score_intents(state)
+            if scored:
+                result["intents"] = scored
+
+        # 3. 派生摘要（每轮全量重算，LastValue 语义正好）
+        if _board_summary is not None:
+            summary = _board_summary(state)
+            if summary:
+                result["board_summary"] = summary
+                log(f"   📋 黑板: {summary}")
+
+        return result
+
+    except Exception as e:
+        # 黑板故障绝不能中断主流程
+        log(f"   ⚠️ 黑板聚合失败（不影响主流程）: {e}")
+        return {}
+
+
 # 创建状态图
 workflow = StateGraph(CTFState) # type: ignore
 
@@ -2777,6 +3006,11 @@ workflow.add_node("explorer", wrap_node("explorer", explorer_node))  # type: ign
 workflow.add_node("innovator", wrap_node("innovator", innovator_node))  # type: ignore # 头脑风暴
 workflow.add_node("verifier", wrap_node("verifier", verifier_node))  # type: ignore # 核验兵 [P3合并]
 workflow.add_node("evolution", wrap_node("evolution", evolution_node))  # type: ignore # 进化闭环
+
+# 黑板聚合节点（仅 ENABLE_BOARD 时注册）
+# 关闭时图结构与改造前完全一致——这是 Phase 2 「行为不变」的基础保证。
+if config.ENABLE_BOARD and BOARD_AVAILABLE:
+    workflow.add_node("board", wrap_node("board", board_node))  # type: ignore # 黑板聚合
 
 # 内网渗透节点 (可选启用)
 if INTERNAL_NETWORK_AVAILABLE:
@@ -2946,16 +3180,40 @@ _verifier_routes = {
     "attacker": "attacker",  # [内网模式] 继续攻击
 }
 
+# 黑板: 失败回环先经过聚合节点（仅启用时注册该路由键）
+if config.ENABLE_BOARD and BOARD_AVAILABLE:
+    _verifier_routes["board"] = "board"
+
 # 添加后渗透路由（如果内网模块可用）
 if INTERNAL_NETWORK_AVAILABLE:
     _verifier_routes["post_exploit"] = "post_exploit"
     _verifier_routes["internal_recon"] = "internal_recon"
 
+
+def _route_verify_with_board(state: CTFState) -> str:
+    """
+    验证后路由（黑板增强版）
+
+    ENABLE_BOARD=false 时逐字节等价于原先的 `route_verify(state, "verifier")`。
+    开启时，把「回到 mode_manager」那条路径改为先经过 board 聚合节点——
+    注意 board 之后仍走 mode_manager，所以**流程走向本身没有改变**，
+    只是中间多了一次黑板聚合。
+    """
+    target = route_verify(state, "verifier")
+    if target == "mode_manager" and config.ENABLE_BOARD and BOARD_AVAILABLE:
+        return "board"
+    return target
+
+
 workflow.add_conditional_edges(
     "verifier",
-    lambda state: route_verify(state, "verifier"),
+    _route_verify_with_board,
     _verifier_routes
 )
+
+# 黑板聚合后回到决策节点（插入一次聚合，不改变流程走向）
+if config.ENABLE_BOARD and BOARD_AVAILABLE:
+    workflow.add_edge("board", "mode_manager")
 
 # 6. 进化结束
 workflow.add_edge("evolution", END)

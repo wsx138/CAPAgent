@@ -734,6 +734,12 @@ def topology():
     return render_template('topology.html')
 
 
+@bp.route('/board')
+def board_page():
+    """黑板（事实-意图图）可视化"""
+    return render_template('board.html')
+
+
 @bp.route('/api/graph')
 def api_graph():
     """获取图结构"""
@@ -1760,6 +1766,56 @@ def api_topology(task_id):
             "total_nodes": len(nodes),
             "total_edges": len(edges)
         }
+    })
+
+
+# =============================================================================
+# 黑板 API（Phase 4）
+# =============================================================================
+
+@bp.route('/api/board/<task_id>')
+def api_board(task_id):
+    """
+    获取任务的黑板状态（结构化事实 / 探索意图 / 技能命中）
+
+    说明: `task_results` 保存的是任务**完成后**的最终 state。
+    运行中任务的中间态需要节点回调机制——现有 `_node_callbacks`
+    （web/api.py 里注册）从未被任何节点消费，属既有缺陷。
+    因此运行中查询返回明确的 unavailable 提示，而不是报错或空数据。
+    """
+    if task_id not in task_results:
+        if task_id in tasks:
+            return jsonify({
+                "available": False,
+                "reason": "running",
+                "message": "任务尚未结束；黑板快照在任务完成后可查",
+            })
+        return jsonify({"error": "Task not found"}), 404
+
+    result = task_results.get(task_id) or {}
+    if not isinstance(result, dict):
+        return jsonify({"error": "Invalid task result"}), 500
+
+    try:
+        from board import dump_board
+        board_data = dump_board(result)
+    except ImportError:
+        return jsonify({"error": "Board module not available"}), 503
+    except Exception as e:
+        return jsonify({"error": f"Board dump failed: {e}"}), 500
+
+    facts = board_data.get("facts", [])
+    intents = board_data.get("intents", [])
+
+    return jsonify({
+        "available": True,
+        "task_id": task_id,
+        # 是否真的启用了黑板（关闭时 facts/intents 恒为空）
+        "enabled": bool(facts or intents),
+        "summary": board_data.get("summary", ""),
+        "facts": facts,
+        "intents": intents,
+        "skill_hits": result.get("skill_hits", []),
     })
 
 

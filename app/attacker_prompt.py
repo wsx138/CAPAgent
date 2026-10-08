@@ -101,6 +101,7 @@ def get_attacker_prompt(vuln_candidates: List[Dict], tool_definitions: str,
                         known_facts: str = None,
                         failed_payloads: List[str] = None,
                         human_hint: str = None,
+                        skills: List[Dict] = None,
                         include_payloads: bool = True) -> str:
     """
     [P3优化版] 生成攻击兵提示词
@@ -153,6 +154,31 @@ def get_attacker_prompt(vuln_candidates: List[Dict], tool_definitions: str,
 {failed_items}
 """
 
+    # 技能参考（黑板匹配结果）
+    #
+    # ⚠️ 只注入 name + description + tools（每条 ≤300 字），**Markdown 正文不进 prompt**。
+    #    原因: 技能正文是完整打法步骤，整篇塞进来会盖掉本 prompt 里
+    #    「优先 recommended_tools」等强约束，还可能诱导 LLM 绕过
+    #    failed_payloads 黑名单、重复发送已知无效的 payload。
+    skills_desc = ""
+    if skills:
+        skill_lines = []
+        for sk in skills[:3]:
+            sk_name = str(sk.get("name", ""))
+            sk_desc = str(sk.get("description", ""))[:120]
+            sk_tools = ", ".join(sk.get("tools") or [])
+            line = f"- {sk_name}: {sk_desc}"
+            if sk_tools:
+                line += f"（可用工具: {sk_tools}）"
+            skill_lines.append(line[:300])
+        skills_desc = (
+            "\n## 🎯 推荐打法（技能库匹配）\n"
+            "以下是根据当前环境（技术栈 + 已确认事实）匹配出的高价值打法，**优先采用**：\n"
+            + "\n".join(skill_lines)
+            + "\n\n注意: 采用这些打法时，仍须严格遵守上面的「已失败Payload」黑名单，"
+              "不要重复发送已被证明无效的 payload。\n"
+        )
+
     # 获取相关 Payload 参考
     payload_ref = ""
     if include_payloads and vuln_candidates:
@@ -166,6 +192,7 @@ def get_attacker_prompt(vuln_candidates: List[Dict], tool_definitions: str,
 ## 任务
 {task_desc}
 {guidance_desc}
+{skills_desc}
 {hint_desc}
 
 ## 分析情报

@@ -23,6 +23,10 @@ typing-extensions>=4.0.0
 chromadb>=0.4.0
 sentence-transformers>=2.2.0
 
+# Graph Analysis (站点拓扑分析 app/topology/，黑板图分析 app/board/)
+# 注: 此前该依赖被 import 但未声明，仅在本机恰好预装时才可用
+networkx>=3.0
+
 # Security Tools Integration
 pwn>=1.0.0  # pwntools
 impacket>=0.11.0

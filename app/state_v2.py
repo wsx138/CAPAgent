@@ -42,6 +42,19 @@ from state_types.reducers import (
 _cap_50_reducer = _make_cap_reducer(50)
 _cap_100_reducer = _make_cap_reducer(100)
 
+# 黑板通道的 reducer（渐进式改造 Phase 2）
+#
+# ⚠️ 必须容错导入: state_v2 是全系统的核心状态定义，若因新模块缺失/路径问题导致
+#    这里 import 失败，整个 Agent 都起不来。降级时用带上限的追加 reducer 占位
+#    —— ENABLE_BOARD=false 时黑板字段本就不会被写入，降级不影响既有行为。
+try:
+    from board.reducers import upsert_facts_reducer, upsert_intents_reducer
+    BOARD_REDUCERS_AVAILABLE = True
+except ImportError:  # pragma: no cover - 仅在新模块缺失时触发
+    BOARD_REDUCERS_AVAILABLE = False
+    upsert_facts_reducer = _cap_100_reducer      # type: ignore[assignment]
+    upsert_intents_reducer = _cap_50_reducer     # type: ignore[assignment]
+
 
 class CTFStateV2(TypedDict):
     """
@@ -112,6 +125,16 @@ class CTFStateV2(TypedDict):
     focused_scene: str  # 当前聚焦场景，如 "Spring", "Tomcat/9.0.30"
     scene_attack_attempts: int  # 当前场景攻击尝试次数
     scene_exhausted: bool  # 当前场景是否已穷尽
+
+    # =====================================================
+    # [X] 黑板字段（渐进式改造 Phase 2）
+    # ENABLE_BOARD=false 时不写入，行为与改造前完全一致。
+    # 详见 app/board/ 与实施计划。
+    # =====================================================
+    facts: Annotated[List[Dict], upsert_facts_reducer]      # 结构化事实，按 id 幂等合并
+    intents: Annotated[List[Dict], upsert_intents_reducer]  # 探索意图，状态只前进
+    board_summary: str  # 黑板统计摘要（派生视图，每轮重算->LastValue 语义）
+    skill_hits: List[Dict]  # 本轮匹配到的技能（attacker 消费）
 
     # =====================================================
     # [I] 内网渗透字段

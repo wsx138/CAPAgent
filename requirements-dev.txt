@@ -1,0 +1,10 @@
+# CTF-Agent 开发依赖（不用于生产运行）
+#
+# 安装:
+#   pip install -r requirements.txt -r requirements-dev.txt
+#
+# 运行测试:
+#   pytest tests/ -q
+
+# 测试框架
+pytest>=8.0
