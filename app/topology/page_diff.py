@@ -84,14 +84,17 @@ class PageDiffManager:
         if count > 0:
             logger.info(f"🧹 已清理 {count} 个旧缓存文件")
 
-    def save_page(self, url: str, content: bytes, page_history: Dict[str, Any]) -> Dict[str, Any]:
+    def save_page(self, url: str, content: bytes, page_history: Dict[str, Any],
+                  duration: float = None) -> Dict[str, Any]:
         """保存页面响应并更新历史记录
-        
+
         Args:
             url: 请求的URL
             content: 响应内容（bytes）
             page_history: 全局页面历史字典
-            
+            duration: 本次请求耗时（秒）。用于时间盲注检测——盲注的响应内容
+                      与基线完全一致，只有耗时是可观测信号。
+
         Returns:
             Dict: 本次保存的文件信息
         """
@@ -122,9 +125,15 @@ class PageDiffManager:
         # 这意味着每次成功的请求都会成为下一次请求的基线
         history["last_file"] = file_path
         history["last_md5"] = md5
-             
+
+        # 记录耗时，作为时间盲注检测的基线
+        # 用"上一次耗时"而非全局平均：连续两次请求的网络条件最接近，
+        # 比较更有意义（全局平均会被不同 URL 的差异带偏）
+        if duration is not None:
+            history["last_duration"] = float(duration)
+
         page_history[url] = history
-        
+
         return {
             "file_path": file_path,
             "md5": md5,
@@ -132,8 +141,17 @@ class PageDiffManager:
             "timestamp": time.time()
         }
 
-    def compare_and_analyze(self, url: str, current_content: bytes, page_history: Dict[str, Any]) -> Dict[str, Any]:
+    def compare_and_analyze(self, url: str, current_content: bytes, page_history: Dict[str, Any],
+                            duration: float = None) -> Dict[str, Any]:
         """对比本次响应与基线，并分析差异
+
+        Args:
+            url: 请求 URL
+            current_content: 本次响应内容
+            page_history: 页面历史
+            duration: 本次请求耗时（秒）。**时间盲注的唯一可观测信号**——
+                      盲注 payload 的响应内容与基线完全一致（MD5 相同），
+                      只有耗时会出现数量级变化。
 
         Returns:
             Dict: 包含变化分析结果
@@ -146,7 +164,7 @@ class PageDiffManager:
 
         # 首次访问
         if url not in page_history:
-            saved_info = self.save_page(url, current_content, page_history)
+            saved_info = self.save_page(url, current_content, page_history, duration=duration)
             return {
                 "changed": True,
                 "is_exploit": False,
@@ -161,8 +179,41 @@ class PageDiffManager:
         last_md5 = history.get("last_md5")
         last_file = history.get("last_file")
 
-        # MD5相同，无变化
+        # MD5相同 —— 内容字节完全一致
         if current_md5 == last_md5:
+            # ★ 时间盲注检测
+            #
+            # 内容一致【不等于】攻击无效。时间盲注 payload（如 `AND sleep(5)`）
+            # 的响应内容与基线完全相同，但服务器会真的阻塞若干秒——**耗时是
+            # 唯一可观测信号**。原实现只比 MD5，会把成功的时间盲注判为失败，
+            # 进而累积失败分、提前放弃该方向。
+            last_duration = history.get("last_duration")
+            if duration is not None and last_duration:
+                try:
+                    d_now, d_base = float(duration), float(last_duration)
+                except (TypeError, ValueError):
+                    d_now = d_base = 0.0
+                # 与【基线耗时】对比，而非固定阈值——不同目标的正常响应速度
+                # 差异很大（内网 10ms vs 公网 800ms）。
+                # 判据 3 倍 + 2 秒余量：能抓住 sleep(5) 这类明显注入，
+                # 又能容忍正常网络抖动。
+                if d_base > 0 and d_now > d_base * 3 + 2.0:
+                    logger.info(
+                        f"⏱️ 疑似时间盲注: {url} 内容无变化但耗时 {d_base:.2f}s → {d_now:.2f}s"
+                    )
+                    return {
+                        "changed": False,
+                        "is_exploit": True,        # 内容没变，但极可能是成功的盲注
+                        "time_anomaly": True,
+                        "confidence": 0.6,         # 网络抖动可能造成假阳性，故不给高置信度
+                        "reason": f"内容未变但耗时异常 {d_base:.2f}s→{d_now:.2f}s，疑似时间盲注",
+                        "score_adjustment": config.SCORE_CHANGE_EXPLOIT,
+                        "md5": current_md5,
+                        "file_path": last_file,
+                        "duration": d_now,
+                        "baseline_duration": d_base,
+                    }
+
             return {
                 "changed": False,
                 "reason": "MD5一致",
@@ -183,8 +234,8 @@ class PageDiffManager:
             except Exception:
                 pass
 
-        # 保存新文件
-        saved_info = self.save_page(url, current_content, page_history)
+        # 保存新文件（同时刷新耗时基线）
+        saved_info = self.save_page(url, current_content, page_history, duration=duration)
         current_file_path = saved_info.get("file_path")
 
         # 正则扫Flag (最优先)

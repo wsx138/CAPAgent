@@ -1997,7 +1997,10 @@ def _search_flags_on_host(session, os_type: str, host: str) -> List[str]:
     让AI分析环境后决定搜索策略，而非硬编码路径
     """
     import re
-    from flag_extractor import extract_flags_from_text
+    # 修正: 原为 extract_flags_from_text，但 flag_extractor 中不存在该函数
+    # （只有 extract_flags / extract_first_flag / check_for_flag），
+    # 属于运行时 ImportError——启动不报错，跑到本节点才崩。
+    from flag_extractor import extract_flags
 
     flags = []
 
@@ -2089,7 +2092,7 @@ def _search_flags_on_host(session, os_type: str, host: str) -> List[str]:
             result = execute_on_session(session, cmd, timeout=30)
             if result.success and result.output:
                 # 提取flag
-                found = extract_flags_from_text(result.output)
+                found = extract_flags(result.output)
                 if found:
                     flags.extend(found)
                     logger.info(f"在 {host} 发现flag: {found[0][:30]}...")

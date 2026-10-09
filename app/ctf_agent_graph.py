@@ -1,3 +1,20 @@
+# =============================================================================
+# 路径设置：确保项目根在 sys.path
+#
+# tools/、internal_network/ 等模块位于**项目根**（不在 app/ 下）。直接运行
+# `python app/ctf_agent_graph.py` 时，Python 只把脚本所在目录（app/）加入
+# sys.path，项目根不在其中，于是 `from tools import ...` 会报
+# "No module named 'tools'"。
+#
+# web/api.py 已经做了同样的处理（见其 sys.path.insert），这里保持一致。
+# =============================================================================
+import os as _os
+import sys as _sys
+
+_PROJECT_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _PROJECT_ROOT not in _sys.path:
+    _sys.path.insert(0, _PROJECT_ROOT)
+
 import argparse
 import re
 import hashlib
@@ -1832,7 +1849,10 @@ def execute_single_attack(action: Dict, current_url: str, page_history: Dict) ->
             if len(content) > 1500:
                 short_output += f"\n... (Total {len(content)} bytes, see file)"
 
-            diff_analysis = page_diff_manager.compare_and_analyze(target, content, page_history)
+            # 传入耗时：时间盲注的响应内容与基线完全一致，只有耗时是可观测信号
+            diff_analysis = page_diff_manager.compare_and_analyze(
+                target, content, page_history, duration=duration
+            )
 
             # [核心修复] 将 diff_analysis 中的 extracted_flag 提升到顶层 result
             result = {
@@ -1845,7 +1865,12 @@ def execute_single_attack(action: Dict, current_url: str, page_history: Dict) ->
                 "file_path": file_path,
                 "duration": duration,
                 "diff_analysis": diff_analysis,
-                "is_exploit": diff_analysis.get("changed", False)
+                # 修正: 原为 diff_analysis.get("changed", ...)，但 changed 只表示
+                # "内容变了"——服务器返回一个 500 报错页也会 changed=True。
+                # 真正的成功判断是 diff_analysis["is_exploit"]（由 LLM 分析或
+                # 时间盲注检测得出）。注意时间盲注的情况是 is_exploit=True 但
+                # changed=False，用 changed 会把它漏掉。
+                "is_exploit": diff_analysis.get("is_exploit", diff_analysis.get("changed", False))
             }
             # [核心修复] extracted_flag 需要提升到顶层，确保 verifier 能直接读取
             if diff_analysis.get("extracted_flag"):

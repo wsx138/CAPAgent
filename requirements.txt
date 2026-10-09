@@ -54,3 +54,41 @@ flask-cors>=4.0.0
 
 # MCP (Model Context Protocol)
 mcp>=1.0.0
+
+# =============================================================================
+# 功能模块依赖
+#
+# 以下依赖此前被代码 import 但**未在依赖清单中声明**（依赖本机恰好预装）。
+# 多数在 try/except 保护下，缺失不会导致启动失败，但对应功能会静默失效。
+# 不需要的功能可以按注释删减以减小安装体积。
+# =============================================================================
+
+# 性能监控（app/performance.py）—— 节点执行计时/耗时统计
+psutil>=5.9.0
+
+# 拓扑可视化（app/topology/visualizer.py）—— 导出 HTML 拓扑图
+matplotlib>=3.7.0
+pyvis>=0.3.2
+
+# RAG 建库脚本（rag_builder/vector_store.py）—— 手动执行时的进度条
+tqdm>=4.66.0
+
+# 内网渗透（remote_executor/）
+paramiko>=3.4.0        # SSH 会话
+msgpack>=1.0.7         # 会话状态序列化
+
+# 容器化工具（app/tool_framework.py 的 DockerTool）
+docker>=7.0.0
+
+# 逆向分析（reverse/tools.py 的反汇编能力）
+capstone>=5.0.0
+
+# Misc 模块（misc/tools.py）—— 音频文件元数据识别
+mutagen>=1.47.0
+
+# Flask session 伪造工具（tools/flask_unsign_tool.py）
+flask-unsign>=1.0.1
+
+# ChromaDB 在旧版 Linux/Docker 下的 SQLite 版本兼容（app/ctf_agent_graph.py）
+# 可选：系统 sqlite3 >= 3.35 时无需安装
+pysqlite3-binary>=0.5.0
