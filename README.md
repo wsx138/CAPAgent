@@ -1,281 +1,411 @@
-# ctf_agent-main
+<div align="center">
 
-基于 LangGraph 的智能 CTF 自动化解题系统 - AI驱动全流程，支持六大CTF方向
+# CTF-Agent
 
-项目简介
-CTF-Agent 是一个智能化的渗透测试代理，能够自主完成从信息侦察到漏洞利用的全流程。系统通过 LLM 驱动多兵种节点协同工作，支持 Web安全、内网渗透、密码学、逆向、Pwn、Misc、AI安全、云安全 八大方向。
+**基于 LangGraph + 黑板架构的智能 CTF 自动化解题系统**
 
-核心特性
-🤖 AI驱动全流程
-Web CTF: 侦察 → 分析 → 攻击 → 验证 → 进化
-内网渗透: 后渗透 → 工具上传 → 隧道搭建 → 横向移动 → 权限提升 → 持久化
-动态决策: 所有决策节点由AI驱动，避免硬编码
-🛡️ 八大CTF方向
-方向	核心文件	关键节点
-Web	app/ctf_agent_graph.py	recon, analyst, attacker, verifier, innovator
-Internal Network	internal_network/nodes.py	post_exploit, internal_recon, lateral_move, privilege_escalation
-Crypto	crypto/nodes.py	crypto_analyst, crypto_solver
-Pwn	pwn/nodes.py	pwn_analyst, pwn_exploiter
-Reverse	reverse/nodes.py	reverse_analyst, reverse_decompiler
-Misc	misc/nodes.py	misc_analyst, misc_extractor
-AI Security	ai_security/nodes.py	ai_analyst, model_attacker
-Cloud Security	cloud_security/nodes.py	cloud_recon, cloud_exploit
-🔧 49 模块化安全工具
-分类	工具列表
-漏洞扫描	nuclei_tool, xray_tool, fscan_tool, nmap_tool, cve_scanner
-注入攻击	sqlmap_tool, fenjing_tool (SSTI), dalfox_tool (XSS), xxe_injector_tool
-反序列化	ysoserial_tool, phpggc_tool, marshalsec_tool, pickle_pwn_tool, phar_gen_tool
-内网渗透	impacket_tools, crackmapexec_tool, mimikatz_tool, msf_tool
-域渗透	bloodhound_tool, petitpotam_tool, rubeus_tool, kerberos_attacks
-权限提升	potato_tool, privesc_tool
-SSRF利用	ssrfmap_tool, gopherus_tool, ssrf_scanner
-目录扫描	dirsearch_tool, ffuf_tool
-信息收集	jsfinder_tool, jwt_tool, httpx_tool, subfinder_tool, git_hacker_tool
-OA漏洞	oa_exploiter, ajpshooter_tool
-隧道/代理	frp_manager
-云安全	cloud_scanner
-容器安全	container_escape_tool
-AI攻击	ai_attacker
-其他	hydra_tool, flask_unsign_tool, jndi_exploit_tool, payload_mutator, db_attacks
-✨ 系统特性（2026-03 更新）
-模块化状态类型: 8种场景状态（WebCTFState, InternalNetworkState, CryptoCTFState等）
-统一日志系统: 按任务/节点分离日志，控制台简洁输出
-性能监控面板: 节点/LLM/工具执行耗时统计，持久化存储
-拓扑分析: 站点结构可视化、页面差异检测、剪枝优化
-任务持久化: SQLite存储，支持断点续传
-并发控制: LLMRateLimiter API调用限流
-AI驱动改进: Flag验证、漏洞链分析、智能工具选择、规则过滤
-会话管理: SSH/Shell会话创建后自动验证有效性
-线程安全: 多任务并发时日志隔离
-远程执行: 文件传输、隧道管理、HTTP服务器
-Quick Start
-1. 环境要求
-Python 3.10+
-Docker (可选，推荐)
-2. 配置
+从信息侦察到漏洞利用的全流程自主渗透代理
+
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![LangGraph](https://img.shields.io/badge/LangGraph-0.2%2B-1C3C3C?logo=langchain&logoColor=white)](https://github.com/langchain-ai/langgraph)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
+[![Tools](https://img.shields.io/badge/集成工具-69-orange.svg)](#-工具生态)
+[![Directions](https://img.shields.io/badge/CTF方向-8-blue.svg)](#-八大方向)
+
+</div>
+
+---
+
+## 📖 简介
+
+**CTF-Agent** 是一个 LLM 驱动的自动化渗透测试代理。它把渗透测试建模为**在未知状态空间中的有向搜索**——起点（目标）已知、终点（flag）明确、路径未知——通过多节点协同与黑板架构逐步逼近目标。
+
+系统覆盖 **8 大 CTF 方向**，集成 **69 个安全工具**，支持从单点 Web 漏洞到多层内网渗透的完整链路。
+
+> ⚠️ **仅供授权环境使用**：CTF 竞赛、靶场、已获书面授权的渗透测试。使用前请确认你拥有对目标的操作授权。
+
+---
+
+## ✨ 核心特性
+
+<table>
+<tr><td width="50%" valign="top">
+
+### 🧠 黑板架构
+- **Fact / Intent / Hint** 三原语
+- 事实结构化（12 种类型），支持查询与技能匹配
+- 图分析（PageRank）自动计算探索优先级
+- 幂等合并：重复发现自动去重并提升置信度
+
+</td><td width="50%" valign="top">
+
+### 🎯 技能库
+- YAML frontmatter + Markdown 的**攻击手法单元**
+- 按技术栈/事实类型/关键词自动匹配
+- 每个技能带**失败信号**，知道何时该换打法
+- 可扩展：新增 `.md` 即新增技能
+
+</td></tr>
+<tr><td valign="top">
+
+### 🤖 AI 驱动决策
+- 所有决策节点由 LLM 驱动，避免硬编码流程
+- 工具实测证伪：LLM 的推测必须经真实回包验证
+- 失败分累积自动触发模式切换（exploit → explore → innovate）
+
+</td><td valign="top">
+
+### 🔬 差分检测
+- MD5 内容比对识别页面变化
+- **时间盲注检测**：内容不变但耗时异常 → 识别成功的盲注
+- 大响应体自动落盘，不撑爆上下文
+
+</td></tr>
+</table>
+
+---
+
+## 🗺️ 八大方向
+
+| 方向 | 核心模块 | 关键节点 |
+|------|---------|---------|
+| **Web** | `app/ctf_agent_graph.py` | `recon` `analyst` `attacker` `verifier` `innovator` |
+| **内网渗透** | `internal_network/nodes.py` | `post_exploit` `internal_recon` `lateral_move` `privilege_escalation` |
+| **密码学** | `crypto/nodes.py` | `crypto_analyst` `crypto_solver` |
+| **Pwn** | `pwn/nodes.py` | `pwn_analyst` `pwn_exploiter` |
+| **逆向** | `reverse/nodes.py` | `reverse_analyst` `reverse_decompiler` |
+| **Misc** | `misc/nodes.py` | `misc_analyst` `misc_extractor` |
+| **AI 安全** | `ai_security/nodes.py` | `ai_analyst` `model_attacker` |
+| **云安全** | `cloud_security/nodes.py` | `cloud_recon` `cloud_exploit` |
+
+---
+
+## 🏗️ 架构
+
+### 执行流（LangGraph）
+
+```
+                        ┌──────────────────┐
+                        │  challenge_type  │
+                        │    _detector     │
+                        └────────┬─────────┘
+                                 │
+              ┌──────────────────┼──────────────────┐
+              ▼                  ▼                  ▼
+          [ Web CTF ]       [ 内网渗透 ]        [ 其他方向 ]
+              │                  │                  │
+      recon → analyst      post_exploit        crypto/pwn/...
+         │       │              │              reverse/misc/...
+         ▼       ▼              ▼              cloud/ai
+      attacker → verifier   lateral_move
+         │          │       privilege_escalation
+         └──────────┤              │
+                    ▼              ▼
+              [ evolve ]      [ flag_search ]
+                    │
+                   END
+```
+
+### 黑板层（本项目新增）
+
+黑板**叠加**在流程之上，不替代流程——它决定「**我看到了什么**」和「**接下来值得做什么**」：
+
+```
+   ┌─────────────────────────────────────────────┐
+   │              黑  板（共享事实区）             │
+   │  facts:   [tech, vuln, credential, ...]     │
+   │  intents: [待探索方向（带优先级）]            │
+   └────┬───────────────────────────────▲────────┘
+        │ 读（投影 top-N）               │ 写（提议新事实）
+        ▼                               │
+   ┌─────────┐      行动      ┌─────────┴───────┐
+   │attacker │ ─────────────> │    verifier     │
+   └─────────┘                └─────────────────┘
+        ▲                             │
+        │ 读（该打哪个方向）           │ 算（重算优先级/匹配技能）
+        │                             ▼
+   ┌────┴────┐                ┌─────────────┐
+   │ intents │ <───────────── │  board_node │
+   └─────────┘     产出        └─────────────┘
+```
+
+**三个原语**：
+
+| 原语 | 含义 | 谁产生 |
+|------|------|--------|
+| **Fact** | 已确认的客观发现（12 种类型） | recon / analyst / verifier |
+| **Intent** | 已声明、待执行的探索方向 | analyst / 图分析 |
+| **Hint** | 人类中途注入的判断 | 人 |
+
+**为什么这样设计**：信息不再随流程流失，决策有了全局视野，重复观察自动变成交叉验证。
+
+---
+
+## 🚀 快速开始
+
+### 环境要求
+
+- Python **3.10+**
+- Docker（可选，**推荐** —— 第三方工具已打包）
+
+### 方式一：Docker（推荐）
+
+```bash
+git clone https://github.com/wsx138/CAPAgent.git
+cd CAPAgent
+
 cp config.yaml.example config.yaml
-编辑 config.yaml，填入API Key：
+vim config.yaml          # 填入 LLM_API_KEY
 
-LLM_API_KEY: "your-api-key"
-LLM_BASE_URL: "https://api.deepseek.com/v1"
-3. 启动 Web UI
-Docker 部署 (推荐)
 docker-compose up -d --build
 docker logs -f ctf-agent
-# 访问: http://localhost:54565/fisher_ctf_agent/monitor
-本地运行
+
+# 访问 http://localhost:54565/fisher_ctf_agent/monitor
+```
+
+### 方式二：本地运行
+
+```bash
 pip install -r requirements.txt
+
+cp config.yaml.example config.yaml
+vim config.yaml          # 填入 LLM_API_KEY
+
 # Windows
 start_web.bat
-# Linux/Mac
+
+# Linux / macOS
 ./start_web.sh
-# 访问: http://localhost:54565/fisher_ctf_agent/monitor
-Web UI 功能
-任务管理: 创建/暂停/恢复任务
-实时监控: 节点执行状态、日志流
-拓扑图: 站点结构可视化
-性能面板: 耗时统计
-模块管理: 启用/禁用功能模块
-4. 命令行模式
-python app/ctf_agent_graph.py --target http://目标地址
---mode exploit      # 直接攻击模式
---mode explore      # 探索模式
---max-rounds 30     # 最大轮次
-目录结构
-deploy/
-├── app/                        # 核心代码
-│   ├── ctf_agent_graph.py      # 主程序入口 (147KB)
-│   ├── state_v2.py             # 状态定义
-│   ├── state_types/            # 模块化状态类型
-│   │   ├── base.py             # 基础状态
-│   │   ├── web.py              # Web CTF状态
-│   │   ├── internal_network.py # 内网渗透状态
-│   │   ├── crypto.py           # 密码学状态
-│   │   ├── pwn.py              # Pwn状态
-│   │   ├── reverse.py          # 逆向状态
-│   │   ├── misc.py             # Misc状态
-│   │   ├── ai_security.py      # AI安全状态
-│   │   ├── cloud.py            # 云安全状态
-│   │   └── reducers.py         # 状态规约器
-│   ├── nodes/                  # 节点辅助模块
-│   ├── topology/               # 拓扑分析
-│   │   ├── analyzer.py         # 站点分析
-│   │   ├── builder.py          # 拓扑构建
-│   │   ├── pruner.py           # 剪枝优化
-│   │   ├── page_diff.py        # 页面差异检测
-│   │   └── visualizer.py       # 可视化
-│   ├── logger.py               # 统一日志系统
-│   ├── performance.py          # 性能监控
-│   ├── llm_client.py           # LLM客户端
-│   ├── router.py               # 节点路由
-│   ├── tool_framework.py       # 工具框架基类
-│   ├── tool_selector.py        # AI工具选择
-│   ├── self_correction.py      # 自我纠错
-│   ├── context_compressor.py   # 上下文压缩
-│   ├── task_persistence.py     # 任务持久化
-│   ├── evolution.py            # 进化闭环
-│   ├── flag_validator.py       # Flag验证
-│   ├── innovator_agent.py      # 创新节点
-│   └── prompts/                # 提示词模块
-├── tools/                      # 49个安全工具
-│   ├── __init__.py             # 自动注册机制
-│   ├── nmap_tool.py            # 端口扫描
-│   ├── sqlmap_tool.py          # SQL注入
-│   ├── fscan_tool.py           # 内网扫描
-│   ├── nuclei_tool.py          # 漏洞扫描
-│   ├── impacket_tools.py       # 内网工具集
-│   └── ...                     # 其他工具
-├── internal_network/           # 内网渗透模块
-│   ├── nodes.py                # 内网节点 (73KB)
-│   ├── post_exploit.py         # 后渗透处理
-│   ├── advanced_operations.py  # 高级操作
-│   ├── credential_manager.py   # 凭据管理
-│   ├── kerberos_attacks.py     # Kerberos攻击
-│   └── prompts.py              # 提示词
-├── crypto/                     # 密码学模块
-│   ├── nodes.py                # 密码学节点
-│   ├── tools.py                # 密码学工具
-│   └── prompts.py              # 提示词
-├── pwn/                        # Pwn模块
-│   ├── nodes.py                # Pwn节点
-│   ├── tools.py                # Pwn工具
-│   └── prompts.py              # 提示词
-├── reverse/                    # 逆向模块
-│   ├── nodes.py                # 逆向节点
-│   ├── tools.py                # 逆向工具
-│   └── prompts.py              # 提示词
-├── misc/                       # Misc模块
-│   ├── nodes.py                # Misc节点
-│   ├── tools.py                # Misc工具
-│   └── prompts.py              # 提示词
-├── ai_security/                # AI安全模块
-│   ├── nodes.py                # AI安全节点
-├── cloud_security/             # 云安全模块
-│   ├── nodes.py                # 云安全节点
-├── remote_executor/            # 远程执行模块
-│   ├── executors.py            # 远程执行器
-│   ├── session_manager.py      # 会话管理
-│   ├── tunnel_manager.py       # 隧道管理
-│   ├── file_transfer.py        # 文件传输
-│   └── http_server.py          # HTTP服务器
-├── memory/                     # 记忆管理模块
-│   ├── memory_manager.py       # 记忆管理
-│   ├── performance_persistence.py # 性能持久化
-│   └── token_stats.py          # Token统计
-├── rag_builder/                # RAG知识检索
-│   ├── vector_store.py         # 向量存储
-│   └ retriever.py              # 检索器
-├── web/                        # Web UI
-│   ├── api.py                  # REST API (75KB)
-│   ├── templates/              # HTML模板
-│   │   ├── monitor.html        # 监控页面
-│   │   ├── topology.html       # 拓扑页面
-│   │   └── modules.html        # 模块管理
-│   └── static/                 # 静态资源
-├── thirdparty/                 # 第三方工具 (22个)
-│   ├── nuclei/                 # 漏洞扫描
-│   ├── xray/                   # 漏洞扫描
-│   ├── SSRFmap/                # SSRF利用
-│   ├── Gopherus/               # Gopher生成
-│   ├── Githacker/              # .git泄露
-│   ├── phpggc/                 # PHP反序列化
-│   ├── marshalsec/             # Java反序列化
-│   ├── ysoserial/              # Java反序列化
-│   ├── jwt_tool/               # JWT利用
-│   ├── JSFinder/               # JS发现
-│   ├── XXEinjector/            # XXE注入
-│   ├── PetitPotam/             # AD认证攻击
-│   ├── Ghostcat/               # AJP利用
-│   ├── jndiexploit/            # JNDI利用
-│   ├── rubeus/                 # Kerberos
-│   ├── ffuf/                   # 目录爆破
-│   ├── httpx/                  # HTTP探测
-│   ├── subfinder/              # 子域名发现
-│   ├── frp/                    # 内网穿透
-│   ├── fscan_linux/            # 内网扫描
-│   ├── fscan_windows/          # 内网扫描
-│   └── php_filter_chain_generator/
-├── docs/                       # 文档 (24个)
-├── tests/                      # 单元测试
-├── test_suite/                 # 测试套件
-├── Dockerfile
-├── docker-compose.yml
-├── requirements.txt
-└── config.yaml.example
-工作流程
-Web CTF 流程
-目标URL → [侦察兵] → [分析兵] → [攻击兵] → [核验兵]
-              │           │           │
-              ▼           ▼           ▼
-         page_features  vuln_candidates  attack_batch
-                                           │
-                                           ▼
-                                     [进化/创新/探索]
-内网渗透流程
-获取Shell → [后渗透] → [工具上传] → [隧道搭建] → [内网侦察]
-                                               │
-                        ┌──────────────────────┼──────────────────────┐
-                        ▼                      ▼                      ▼
-                  [凭据收集]              [横向移动]              [权限提升]
-                        │                      │                      │
-                        ▼                      ▼                      ▼
-                  [持久化] ──────────────→ [Flag搜索]
-配置说明
-# LLM配置
-LLM_API_KEY: "sk-xxx"
+```
+
+### 方式三：命令行
+
+```bash
+# 非交互模式：跑完一道题即退出
+python app/ctf_agent_graph.py --target http://target.com
+
+# 交互模式：连续出题
+python app/ctf_agent_graph.py
+```
+
+### 最小配置
+
+```yaml
+# config.yaml
+LLM_API_KEY: "sk-your-key"
 LLM_BASE_URL: "https://api.deepseek.com/v1"
+
 ANALYST_MODEL: "deepseek-chat"
 ATTACKER_MODEL: "deepseek-chat"
+VERIFIER_MODEL: "deepseek-chat"
+```
 
-# 超时配置
-NODE_TIMEOUT: 1800          # 节点超时 30分钟
-TASK_TIMEOUT: 1200          # Web CTF 20分钟
-INTERNAL_TASK_TIMEOUT: 3000 # 内网渗透 50分钟
+---
 
-# VPS配置 (内网渗透必需)
-LOCAL_PUBLIC_IP: "x.x.x.x"
+## 🖥️ Web UI
+
+启动后访问 `http://<host>:54565/fisher_ctf_agent/`
+
+| 页面 | 路径 | 功能 |
+|------|------|------|
+| **控制台** | `/monitor` | 任务管理、实时日志流（SSE）、节点状态 |
+| **模块** | `/modules` | 启用/禁用功能模块与工具 |
+| **拓扑** | `/topology` | 站点结构可视化、关键节点、攻击路径 |
+| **黑板** | `/board` | 事实/意图/技能命中查看 |
+
+> 安全提示：服务**无默认首页**，必须使用完整路径访问。
+
+---
+
+## 🔧 工具生态
+
+**69 个集成工具**，按用途分类：
+
+| 分类 | 工具 |
+|------|------|
+| 漏洞扫描 | `nuclei` `xray` `fscan` `nmap` `cve-scanner` |
+| 注入攻击 | `sqlmap` `fenjing`(SSTI) `dalfox`(XSS) `xxe-injector` |
+| 反序列化 | `ysoserial` `phpggc` `marshalsec` `pickle-pwn` `phar-gen` |
+| 内网渗透 | `impacket` 系列 `crackmapexec` `mimikatz` `msf` |
+| 域渗透 | `bloodhound` `petitpotam` `rubeus` |
+| 权限提升 | `potato` `privesc` |
+| SSRF | `ssrfmap` `gopherus` `ssrf-scanner` |
+| 目录/资产 | `dirsearch` `ffuf` `subfinder` `httpx` `jsfinder` |
+| OA 漏洞 | `oa-exploiter` `ajp-shooter` |
+| 隧道/代理 | `frp-manager` |
+| 云/容器 | `cloud-scanner` `container-escape-checker` |
+| AI 攻击 | `ai-attacker` |
+| 其他 | `hydra` `jwt-tool` `flask-unsign` `jndi-exploit` `git-hacker` `db-attacks` |
+
+### 🎓 技能库
+
+`skills/` 目录下的攻击手法单元（Markdown + YAML frontmatter）：
+
+```markdown
+---
+name: php-filter-chain
+description: PHP filter chain 盲注（无回显场景）
+triggers:
+  tech_stack: [php]
+  fact_kinds: [vuln]
+  keywords: [文件包含, LFI, php://filter]
+tools: [php-filter-chain]
+cost: medium
+---
+## 适用条件
+## 步骤
+## 验证
+## 失败信号
+```
+
+内置：`php-filter-chain` · `jinja2-ssti` · `sql-injection` · `ssrf-gopher` · `php-unserialize`
+
+**新增技能只需放入一个 `.md` 文件。**
+
+---
+
+## 📁 目录结构
+
+```
+CAPAgent/
+├── app/                        # 核心
+│   ├── ctf_agent_graph.py      # 主程序入口 / LangGraph 图定义
+│   ├── state_v2.py             # 状态定义（含黑板通道）
+│   ├── board/                  # 黑板：事实-意图-技能
+│   │   ├── models.py           #   Fact / Intent / Hint 数据模型
+│   │   ├── reducers.py         #   幂等合并规约器
+│   │   ├── extractors.py       #   从节点输出抽取事实
+│   │   ├── analyzer.py         #   图分析 → 优先级
+│   │   └── router_bridge.py    #   黑板路由决策
+│   ├── skills/                 # 技能库加载与匹配
+│   ├── topology/               # 站点拓扑 / 差分检测 / 剪枝
+│   ├── router.py               # 节点路由
+│   ├── llm_client.py           # LLM 客户端（限流/重试）
+│   └── tool_framework.py       # 工具框架基类
+├── skills/                     # 技能定义（Markdown）
+├── tools/                      # 69 个安全工具封装
+├── internal_network/           # 内网渗透模块
+├── crypto/ pwn/ reverse/ misc/ # 各方向模块
+├── ai_security/ cloud_security/
+├── remote_executor/            # 远程执行 / 会话 / 隧道
+├── memory/                     # 三层记忆管理
+├── rag_builder/                # RAG 检索（历史 writeup）
+├── web/                        # Web UI（Flask + Vue3）
+├── thirdparty/                 # 第三方工具二进制
+├── tests/                      # 单元测试
+├── Dockerfile
+├── docker-compose.yml
+└── config.yaml.example
+```
+
+---
+
+## ⚙️ 配置说明
+
+```yaml
+# ── LLM ──────────────────────────────
+LLM_API_KEY: "sk-xxx"
+LLM_BASE_URL: "https://api.deepseek.com/v1"
+ANALYST_MODEL: "deepseek-chat"      # 分析：需强推理
+ATTACKER_MODEL: "deepseek-chat"     # 攻击：需代码生成
+VERIFIER_MODEL: "deepseek-chat"     # 验证：需长文本阅读
+
+# ── 超时 ─────────────────────────────
+NODE_TIMEOUT: 1800                  # 单节点 30 分钟
+TASK_TIMEOUT: 1200                  # Web CTF 20 分钟
+INTERNAL_TASK_TIMEOUT: 3000         # 内网渗透 50 分钟
+
+# ── VPS（内网渗透必需）────────────────
+LOCAL_PUBLIC_IP: "x.x.x.x"          # 反弹 shell / 隧道用
 HTTP_SERVER_PORT: 8000
 FRP_SERVER_PORT: 7000
 FRP_SOCKS5_PORT: 10800
 
-# 模式切换阈值
+# ── 模式切换阈值 ──────────────────────
 FAILURE_SCORE_FOR_EXPLORE: 5.0
 FAILURE_SCORE_FOR_INNOVATE: 10.0
-MAX_TOTAL_ROUNDS: 60
-开发指南
-添加新工具
+
+# ── 黑板（可选，默认关闭）──────────────
+ENABLE_BOARD: false                 # 启用事实-意图黑板
+ENABLE_BOARD_ROUTING: false         # 启用黑板路由覆盖
+```
+
+> **渐进启用**：黑板默认关闭时，行为与未引入时完全一致，可随时开关对比。
+
+---
+
+## 🛠️ 开发指南
+
+### 添加新工具
+
+```python
 # tools/my_tool.py
 from tool_framework import CommandLineTool
 
 class MyTool(CommandLineTool):
     def name(self) -> str:
         return "my-tool"
+
+    def description(self) -> str:
+        return "工具用途说明（会展示给 LLM）"
+
+    def supported_vulns(self) -> list:
+        return ["SQL Injection"]
+
     def get_command(self, target: str, params: dict) -> str:
         return f"my-tool -t {target}"
+```
 
-# 自动注册 (tools/__init__.py 会扫描加载)
-添加新节点
-# 在对应模块的 nodes.py 中
-def my_node(state: CTFState) -> Dict:
-    decision = ai_decide(state)
-    result = execute(decision)
-    return {"result": result}
-统计信息
-项目	数量
-安全工具 (tools/)	49
-第三方工具 (thirdparty/)	22
-CTF方向模块	8
-状态类型	8
-文档文件	24
-核心代码行数	~50,000
-安全注意
-API Key保护: 不要上传 config.yaml
-授权使用: 仅在授权CTF环境使用
-攻击结果敏感: 已添加到 .gitignore
-许可证
-MIT License
+`tools/__init__.py` 会自动扫描并注册，无需手动登记。
 
-致谢
-LangGraph 框架
-DeepSeek / OpenAI API
-各开源安全工具
+### 添加新技能
+
+在 `skills/` 下新建 `.md`，编写 YAML frontmatter + 正文即可：
+
+```markdown
+---
+name: my-skill
+description: 一句话描述
+triggers:
+  tech_stack: [java]
+  keywords: [反序列化]
+tools: [ysoserial]
+cost: medium
+---
+## 适用条件
+## 步骤
+## 验证
+## 失败信号
+```
+
+### 运行测试
+
+```bash
+pip install -r requirements-dev.txt
+pytest tests/ -q
+```
+
+---
+
+## ⚠️ 安全注意
+
+- **API Key 保护**：`config.yaml` 已在 `.gitignore` 中，切勿提交
+- **授权使用**：仅在 CTF 竞赛 / 靶场 / 已获书面授权的环境使用
+- **数据敏感**：`data/`、`.memory/` 含攻击过程数据，已排除出版本控制
+- **爆炸半径**：避免对生产系统执行破坏性操作（删库、批量导出、清库存等）
+
+---
+
+## 📄 License
+
+本项目基于 [MIT License](./LICENSE) 开源。
+
+Copyright (c) 2026 Cyber Range Lab
+
+---
+
+<div align="center">
+
+**致谢**：LangGraph · DeepSeek / OpenAI · 各开源安全工具作者
+
+</div>

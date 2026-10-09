@@ -3666,6 +3666,8 @@ def main():
         5. 输出结果
     """
     parser = argparse.ArgumentParser(description="CTF-Agent v2.5")
+    parser.add_argument("--target", "-t", metavar="URL",
+                        help="目标 URL。提供后进入非交互模式：跑完一道题直接退出")
     parser.add_argument("--skip", action="store_true", help="跳过系统自检")
     args = parser.parse_args()
 
@@ -3688,6 +3690,30 @@ def main():
         log("⏭️ [System] 跳过系统自检。")
     else:
         system_check()
+
+    # =========================================================================
+    # 非交互模式：--target 直接指定目标，跑完一道题就退出
+    # （适合脚本调用/自动化，无需人工输入 URL）
+    # =========================================================================
+    if args.target:
+        target_url = normalize_url(args.target.strip())
+        task_name, task_description = extract_target_info(target_url)
+        log("\n" + "=" * 50)
+        log(f"🎯 目标锁定: {task_name}")
+        log(f"📝 识别描述: {task_description}")
+        log(f"🔗 URL: {target_url}")
+        log("=" * 50)
+
+        result = run_single_task(task_name, task_description, target_url)
+
+        log("\n" + "=" * 50)
+        log("🏁 任务结束")
+        if result.get('found_flag'):
+            log(f"🎉 FLAG: {result.get('final_flag', result.get('found_flag'))}")
+        else:
+            log(f"📊 最终状态: {result.get('current_mode')}")
+            log("❌ 未找到 Flag")
+        return
 
     # 主循环：支持连续出题
     while True:
