@@ -1218,6 +1218,34 @@ def api_tasks_resumable():
     })
 
 
+@bp.route('/api/checkpoints/cleanup', methods=['POST'])
+def api_cleanup_checkpoints():
+    """
+    手动清理陈旧检查点
+
+    默认保留天数取 config.CHECKPOINT_MAX_AGE_DAYS（默认 7 天）。
+    可用 ?days=N 覆盖，?dry_run=1 只统计不删除。
+    """
+    try:
+        from checkpointer import cleanup_checkpoints
+        from config import config as _cfg
+    except ImportError as e:
+        return jsonify({"error": f"模块不可用: {e}"}), 503
+
+    try:
+        days = int(request.args.get("days", getattr(_cfg, "CHECKPOINT_MAX_AGE_DAYS", 7)))
+    except (TypeError, ValueError):
+        return jsonify({"error": "days 必须是整数"}), 400
+
+    dry = request.args.get("dry_run", "").lower() in ("1", "true", "yes")
+    try:
+        result = cleanup_checkpoints(max_age_days=days, dry_run=dry)
+    except Exception as e:
+        return jsonify({"error": f"清理失败: {e}"}), 500
+
+    return jsonify(result)
+
+
 @bp.route('/api/task/<task_id>/result')
 def api_task_result(task_id):
     """获取任务详细结果"""
@@ -2348,14 +2376,24 @@ if __name__ == '__main__':
         print(f"[Recovery] 启动扫描失败（不影响服务）: {_e}")
 
     try:
-        from checkpointer import checkpoint_status
+        from checkpointer import checkpoint_status, cleanup_checkpoints
+        from config import config as _cfg
         _cs = checkpoint_status()
         if _cs["resumable"]:
             print(f"[Checkpoint] 断点续传已启用: {_cs['db_path']}")
+            # 自动清理陈旧检查点（正在运行/可恢复的任务会被保护）
+            if getattr(_cfg, "CHECKPOINT_AUTO_CLEANUP", True):
+                _days = getattr(_cfg, "CHECKPOINT_MAX_AGE_DAYS", 7)
+                _res = cleanup_checkpoints(max_age_days=_days)
+                if _res.get("deleted"):
+                    print(f"[Checkpoint] 已清理 {_res['deleted']} 个陈旧检查点"
+                          f"（保留 {_days} 天，扫描 {_res['scanned']} 个任务）")
+                elif _res.get("errors"):
+                    print(f"[Checkpoint] 清理告警: {_res['errors'][:2]}")
         else:
             print("[Checkpoint] 断点续传未启用 —— 缺少 langgraph-checkpoint-sqlite")
-    except Exception:
-        pass
+    except Exception as _e:
+        print(f"[Checkpoint] 初始化检查失败（不影响服务）: {_e}")
 
     # 配置
     HOST = '0.0.0.0'

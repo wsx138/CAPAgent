@@ -255,3 +255,110 @@ class TestTaskAPI:
         assert body["status"] == "cancelling"
         assert is_cancelled('t_cancel') is True, "取消必须真正生效"
         clear_task('t_cancel')
+
+
+# =============================================================================
+# 5. 检查点清理策略
+# =============================================================================
+
+class TestCheckpointCleanup:
+    """清理必须「只删该删的」——运行中/可恢复的任务永远保护"""
+
+    def _setup(self, tmp_path, monkeypatch, statuses):
+        """
+        构造若干任务记录 + 对应检查点，返回 (cleanup_fn, manager)
+        statuses: [(task_id, status, age_days), ...]
+        """
+        import time as _t
+        from task_persistence import TaskPersistenceManager
+        import checkpointer as ck
+
+        db = str(tmp_path / "tasks.db")
+        pm = TaskPersistenceManager(db_path=db)
+        now = _t.time()
+
+        for tid, status, age_days in statuses:
+            pm.create_task(tid, f"http://{tid}/", "web_ctf")
+            pm.update_task(tid, status=status)
+            # 手工把 updated_at 改老，模拟"很久以前完成的任务"
+            conn = sqlite3.connect(db)
+            conn.execute("UPDATE tasks SET updated_at=? WHERE task_id=?",
+                         (now - age_days * 86400, tid))
+            conn.commit()
+            conn.close()
+
+        # 让 cleanup 用这个 manager
+        monkeypatch.setattr(ck, "SQLITE_CHECKPOINTER_AVAILABLE", True)
+        monkeypatch.setattr("task_persistence.get_task_persistence", lambda: pm)
+
+        # 造出真实的检查点，验证删除确实作用于检查点库
+        cp_db = str(tmp_path / "cp.db")
+        cp, _ = ck.create_checkpointer(cp_db)
+        from typing import Annotated, TypedDict
+        import operator
+        from langgraph.graph import StateGraph, END
+
+        class S(TypedDict):
+            n: Annotated[int, operator.add]
+
+        def only(s): return {"n": 1}
+        g = StateGraph(S)
+        g.add_node("only", only)
+        g.set_entry_point("only"); g.add_edge("only", END)
+        app = g.compile(checkpointer=cp)
+        for tid, _, _ in statuses:
+            app.invoke({"n": 0}, config={"configurable": {"thread_id": f"ctf_task_{tid}"}})
+
+        def count_threads():
+            conn = sqlite3.connect(cp_db)
+            rows = conn.execute("SELECT DISTINCT thread_id FROM checkpoints").fetchall()
+            conn.close()
+            return {r[0] for r in rows}
+
+        return ck.cleanup_checkpoints, count_threads, cp_db
+
+    def test_removes_old_finished_keeps_running(self, tmp_path, monkeypatch):
+        cleanup, count, cp_db = self._setup(tmp_path, monkeypatch, [
+            ("old_done", "completed", 30),     # 该删
+            ("recent_done", "completed", 1),   # 保留（太新）
+            ("still_running", "running", 30),  # 保留（未终结，必须保护）
+            ("resumable", "pending", 30),      # 保留（可恢复，必须保护）
+        ])
+        before = count()
+        assert len(before) == 4
+
+        res = cleanup(max_age_days=7, db_path=cp_db)
+
+        after = count()
+        assert res["deleted"] == 1, f"应只删 1 个，实际 {res['deleted']}"
+        assert "ctf_task_old_done" not in after, "陈旧已完成任务应被清理"
+        assert "ctf_task_still_running" in after, "**运行中的任务绝不能被清理**"
+        assert "ctf_task_resumable" in after, "**可恢复的任务绝不能被清理**"
+        assert "ctf_task_recent_done" in after, "未超期的应保留"
+
+    def test_dry_run_does_not_delete(self, tmp_path, monkeypatch):
+        cleanup, count, cp_db = self._setup(tmp_path, monkeypatch, [
+            ("old_done", "completed", 30),
+        ])
+        before = count()
+        res = cleanup(max_age_days=7, db_path=cp_db, dry_run=True)
+        assert res["dry_run"] is True
+        assert res["deleted"] == 1
+        assert count() == before, "dry_run 不得真的删除"
+
+    def test_nothing_to_clean(self, tmp_path, monkeypatch):
+        cleanup, count, cp_db = self._setup(tmp_path, monkeypatch, [
+            ("fresh", "completed", 0),
+        ])
+        res = cleanup(max_age_days=7, db_path=cp_db)
+        assert res["deleted"] == 0
+        assert res["errors"] == []
+
+    def test_failed_and_cancelled_are_also_cleanable(self, tmp_path, monkeypatch):
+        """终态不只 completed——failed/cancelled 同样可清理"""
+        cleanup, count, cp_db = self._setup(tmp_path, monkeypatch, [
+            ("f", "failed", 30),
+            ("c", "cancelled", 30),
+        ])
+        res = cleanup(max_age_days=7, db_path=cp_db)
+        assert res["deleted"] == 2
