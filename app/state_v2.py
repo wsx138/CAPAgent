@@ -39,6 +39,7 @@ from state_types.reducers import (
 )
 
 # 创建带特定上限的 reducer
+_cap_20_reducer = _make_cap_reducer(20)
 _cap_50_reducer = _make_cap_reducer(50)
 _cap_100_reducer = _make_cap_reducer(100)
 
@@ -110,7 +111,10 @@ class CTFStateV2(TypedDict):
     analyst_intel: Optional[str]
     failed_payloads: Annotated[List[str], failed_payloads_reducer]
     hint_level: int
-    hint_history: Annotated[List[Hint], operator.add]
+    # 带上限(20 条)。原为 operator.add —— 无上限累加，一旦接入提示注入
+    # （/api/task/<id>/hint）就会无限增长。state_types/web.py 里的旧定义
+    # 本来就有 cap_list_reducer(...,20)，这里对齐。
+    hint_history: Annotated[List[Hint], _cap_20_reducer]
     last_intervention_step: int
     rag_context: List[str]
     temp_rules: List[Dict]

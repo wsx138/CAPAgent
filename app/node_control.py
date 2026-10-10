@@ -299,10 +299,13 @@ def create_disabled_wrapper(node_name: str, node_func: Callable) -> Callable:
         #    导致 /api/task/<id>/cancel 形同虚设。
         # ② 进度上报：让 web 层注册的 node_callback 真正被调用
         #    （此前 _node_callbacks 从未被消费，UI 拿不到中间状态）。
+        pending_hints = []
         try:
-            from task_runtime import check_cancelled, notify_node
+            from task_runtime import check_cancelled, notify_node, drain_hints
             check_cancelled()
             notify_node(node_name, state)
+            # ③ 人工提示：取出待注入的 hint，在返回时合并进 state
+            pending_hints = drain_hints()
         except ImportError:
             pass  # 运行时模块不可用时保持原行为
         # TaskCancelled 不在此捕获——需要向上传播以中断图执行
@@ -311,10 +314,22 @@ def create_disabled_wrapper(node_name: str, node_func: Callable) -> Callable:
         try:
             from performance import performance_monitor
             with performance_monitor.track_node(node_name):
-                return node_func(state)
+                result = node_func(state)
         except ImportError:
             # 性能监控不可用时直接执行
-            return node_func(state)
+            result = node_func(state)
+
+        # 把待注入的提示合并进节点返回值 —— 走 hint_history 的 reducer
+        # 这样就真正写进了 state，attacker/verifier 下轮即可读到
+        if pending_hints and isinstance(result, dict):
+            result["hint_history"] = pending_hints
+            try:
+                from logger import node_log
+                node_log(node_name, f"已接收 {len(pending_hints)} 条人工提示", "info")
+            except Exception:
+                logger.info("[%s] 已接收 %d 条人工提示", node_name, len(pending_hints))
+
+        return result
 
     return wrapper
 

@@ -1177,6 +1177,46 @@ def api_task_resume(task_id):
     return jsonify({"status": "resumed", "task_id": task_id})
 
 
+@bp.route('/api/task/<task_id>/hint', methods=['POST'])
+def api_task_hint(task_id):
+    """
+    注入人工提示（HINT）
+
+    agent 会在**下一个节点边界**消费它，并作为强约束注入 attacker/verifier
+    的 prompt。注意不是即时的 —— LangGraph 的 state 执行期间无法从外部修改，
+    所以走「事件队列 + 节点边界合并」，延迟不超过一个节点。
+
+    Body: {"content": "提示内容", "level": 1-3}    level 越高越强，默认 2
+    """
+    if task_id not in tasks:
+        return jsonify({"error": "Task not found"}), 404
+
+    data = request.get_json(silent=True) or {}
+    content = (data.get("content") or "").strip()
+    if not content:
+        return jsonify({"error": "content 不能为空"}), 400
+
+    try:
+        level = int(data.get("level", 2))
+    except (TypeError, ValueError):
+        level = 2
+
+    try:
+        from task_runtime import inject_hint, pending_hint_count
+    except ImportError as e:
+        return jsonify({"error": f"运行时不可用: {e}"}), 503
+
+    if not inject_hint(task_id, content, level=level):
+        return jsonify({"error": "提示内容无效"}), 400
+
+    log_callback(task_id, f"[Hint] 收到人工提示(级别{level}): {content[:80]}")
+    return jsonify({
+        "status": "queued",
+        "pending": pending_hint_count(task_id),
+        "note": "提示将在下一个节点边界生效",
+    })
+
+
 @bp.route('/api/tasks/resumable')
 def api_tasks_resumable():
     """

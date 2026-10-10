@@ -19,6 +19,7 @@
 
 import logging
 import threading
+import time
 from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -158,6 +159,77 @@ def clear_task(task_id: str) -> None:
         _callbacks.pop(task_id, None)
         _cancel_flags.pop(task_id, None)
         _cancel_reasons.pop(task_id, None)
+        _hint_queues.pop(task_id, None)
+
+
+# =============================================================================
+# 人工提示（HINT）注入
+#
+# 背景: state 里本来就有 hint_history 字段，attacker/verifier 也会读它
+# （把 source=="human" 的最新提示当强约束注入 prompt），**但没有任何写入入口** ——
+# 字段结构完整、读取逻辑通顺，只是永远为空。
+#
+# 难点: LangGraph 的 state 在 app.invoke() 执行期间无法从外部修改。
+# 所以采用「事件队列 + 节点边界合并」:
+#
+#   Web API ──inject_hint──> 队列 ──wrap_node 出队──> 合并进节点返回值
+#
+# 这样不打断当前执行，hint 会在**下一个节点**生效（延迟不超过一个节点）。
+# =============================================================================
+
+# task_id -> 待注入的 hint 列表
+_hint_queues: Dict[str, list] = {}
+
+
+def inject_hint(task_id: str, content: str, level: int = 2,
+                source: str = "human") -> bool:
+    """
+    注入一条人工提示
+
+    Args:
+        task_id: 目标任务（必须正在运行，否则无人消费）
+        content: 提示内容
+        level:   级别 1-3（越高越强）
+        source:  来源，默认 human
+
+    Returns:
+        是否成功入队
+    """
+    text = (content or "").strip()
+    if not text:
+        return False
+
+    hint = {
+        "level": max(1, min(3, int(level) if str(level).isdigit() else 2)),
+        "content": text[:1000],
+        "source": source,
+        "timestamp": time.time(),
+    }
+    with _lock:
+        _hint_queues.setdefault(task_id, []).append(hint)
+        size = len(_hint_queues[task_id])
+    logger.info("[Runtime] 已注入提示 task=%s level=%s 队列长度=%d", task_id, hint["level"], size)
+    return True
+
+
+def drain_hints(task_id: Optional[str] = None) -> list:
+    """
+    取出并清空该任务的待注入提示
+
+    由 wrap_node 在每个节点边界调用，把取到的提示合并进节点返回值，
+    从而真正写进 state["hint_history"]。
+    """
+    tid = task_id or current_task_id()
+    if not tid:
+        return []
+    with _lock:
+        return _hint_queues.pop(tid, [])
+
+
+def pending_hint_count(task_id: str) -> int:
+    """待消费的提示数量（供接口回显）"""
+    with _lock:
+        return len(_hint_queues.get(task_id, []))
 
 
 def active_tasks() -> list:
