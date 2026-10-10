@@ -558,7 +558,7 @@ def log_callback(task_id, msg):
         task_queues[task_id].put(log_entry)
 
 
-def run_task(task_id, target_url, resume=False):
+def run_task(task_id, target_url, resume=False, task_name=None, task_description=None):
     """
     后台运行任务
 
@@ -566,6 +566,15 @@ def run_task(task_id, target_url, resume=False):
         task_id: 任务标识。**同时作为 LangGraph 的 thread_id 来源**，
                  保证同一任务能接上上次的检查点（断点续传）。
         resume:  True 表示从检查点续跑，不重置状态。
+        task_name:        用户自定义任务名（可选）
+        task_description: 用户自定义任务描述（可选）—— **会真正进入 state**，
+                          影响各节点 prompt 里的题目背景。
+
+    Note:
+        原实现对 name/description 是**无条件覆盖**：
+            task_name, task_description = extract_target_info(target_url)
+        即使用户传了也会被丢掉，导致 state 里永远只有自动生成的模板描述。
+        现改为「用户传了就用用户的，没传才自动推断」。
     """
     global tasks, task_logs, task_queues, task_states, task_results
 
@@ -578,7 +587,14 @@ def run_task(task_id, target_url, resume=False):
         persistence = get_task_persistence()
 
         target_url = normalize_url(target_url)
-        task_name, task_description = extract_target_info(target_url)
+
+        # 自动推断作为兜底，用户输入优先
+        auto_name, auto_desc = extract_target_info(target_url)
+        task_name = (task_name or "").strip() or auto_name
+        task_description = (task_description or "").strip() or auto_desc
+        if task_description != auto_desc:
+            log_callback(task_id, "[System] 使用自定义任务描述")
+
 
         tasks[task_id]["target_url"] = target_url
         tasks[task_id]["task_name"] = task_name
@@ -1047,7 +1063,12 @@ def api_task_start():
         except Exception as e:
             print(f"[API] Failed to persist task: {e}")
 
-    thread = threading.Thread(target=run_task, args=(task_id, target_url))
+    # 把用户输入的 name/description 一并传入 —— 原实现只传 target_url，
+    # 用户填的题目背景会在 run_task 里被自动推断覆盖掉
+    thread = threading.Thread(
+        target=run_task,
+        args=(task_id, target_url, False, task_name, task_description),
+    )
     thread.daemon = True
     thread.start()
 
