@@ -441,35 +441,86 @@ class MemoryManager:
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
-    def compress_memory(self):
-        """压缩旧记忆，防止文件过大"""
-        # 压缩攻击历史
-        history = self._read_json(self.attack_history_file)
-        if len(history) > 100:
-            # 保留成功记录和最近50条
-            successful = [h for h in history if h.get("success")]
-            recent = history[-50:]
-            combined = successful + recent
-            # 去重
-            seen = set()
-            unique = []
-            for h in combined:
-                key = h.get("timestamp")
+    def compress_memory(self, max_facts: int = 200, max_failed: int = 200) -> Dict[str, int]:
+        """
+        压缩记忆文件，防止无限增长
+
+        处理四类文件（原先只处理了前两类，known_facts / failed_attempts
+        是最会增长的却**完全没被处理**）:
+
+        - attack_history.json   保留「成功的 + 最近 50 条」
+        - credentials.json      按 host:username 去重
+        - known_facts.md        按段落保留最近 max_facts 条   ← 新增
+        - failed_attempts.json  保留最近 max_failed 条        ← 新增
+
+        Returns:
+            各类的压缩统计 {"history": N, "credentials": N, "facts": N, "failed": N}
+            数值表示「被裁掉/合并掉的条数」
+        """
+        stats = {"history": 0, "credentials": 0, "facts": 0, "failed": 0}
+
+        # 1. 攻击历史：成功的全留，其余只留最近 50
+        try:
+            history = self._read_json(self.attack_history_file)
+            if len(history) > 100:
+                successful = [h for h in history if h.get("success")]
+                recent = history[-50:]
+                seen, unique = set(), []
+                for h in successful + recent:
+                    key = h.get("timestamp")
+                    if key not in seen:
+                        seen.add(key)
+                        unique.append(h)
+                stats["history"] = len(history) - len(unique)
+                self._write_json(self.attack_history_file, unique)
+        except Exception as e:
+            print(f"[Memory] 压缩攻击历史失败: {e}")
+
+        # 2. 凭据去重
+        try:
+            credentials = self._read_json(self.credentials_file)
+            seen, unique_creds = set(), []
+            for c in credentials:
+                key = f"{c.get('host')}:{c.get('username')}"
                 if key not in seen:
                     seen.add(key)
-                    unique.append(h)
-            self._write_json(self.attack_history_file, unique)
+                    unique_creds.append(c)
+            stats["credentials"] = len(credentials) - len(unique_creds)
+            self._write_json(self.credentials_file, unique_creds)
+        except Exception as e:
+            print(f"[Memory] 压缩凭据失败: {e}")
 
-        # 压缩凭据（去重）
-        credentials = self._read_json(self.credentials_file)
-        seen = set()
-        unique_creds = []
-        for c in credentials:
-            key = f"{c.get('host')}:{c.get('username')}"
-            if key not in seen:
-                seen.add(key)
-                unique_creds.append(c)
-        self._write_json(self.credentials_file, unique_creds)
+        # 3. known_facts.md —— 按 `## ` 段落切分，保留最近 max_facts 段
+        #    这是最会增长的文件：每次归档都会追加
+        try:
+            if self.known_facts_file.exists():
+                text = self.known_facts_file.read_text(encoding="utf-8", errors="replace")
+                # 以 "## " 开头的行作为条目分隔
+                parts = text.split("\n## ")
+                header, entries = parts[0], parts[1:]
+                entries = ["## " + e for e in entries]
+                if len(entries) > max_facts:
+                    stats["facts"] = len(entries) - max_facts
+                    kept = entries[-max_facts:]
+                    self.known_facts_file.write_text(
+                        header + "\n" + "\n".join(kept), encoding="utf-8"
+                    )
+        except Exception as e:
+            print(f"[Memory] 压缩已知事实失败: {e}")
+
+        # 4. failed_attempts.json —— 保留最近 max_failed 条
+        try:
+            attempts = self._read_json(self.failed_attempts_file)
+            if len(attempts) > max_failed:
+                stats["failed"] = len(attempts) - max_failed
+                self._write_json(self.failed_attempts_file, attempts[-max_failed:])
+        except Exception as e:
+            print(f"[Memory] 压缩失败尝试失败: {e}")
+
+        total = sum(stats.values())
+        if total:
+            print(f"[Memory] 压缩完成，共精简 {total} 条: {stats}")
+        return stats
 
     def export_session(self) -> Dict:
         """导出整个会话记录"""

@@ -2395,6 +2395,15 @@ if __name__ == '__main__':
     except Exception as _e:
         print(f"[Checkpoint] 初始化检查失败（不影响服务）: {_e}")
 
+    # ── 记忆整理：精简长期记忆文件（对应短期记忆的「压缩」在下层做）──
+    try:
+        from memory.memory_manager import get_memory_manager
+        _ms = get_memory_manager().compress_memory()
+        if any(_ms.values()):
+            print(f"[Memory] 记忆整理完成，精简 {sum(_ms.values())} 条: {_ms}")
+    except Exception as _e:
+        print(f"[Memory] 记忆整理失败（不影响服务）: {_e}")
+
     # 配置
     HOST = '0.0.0.0'
     PORT = 54565

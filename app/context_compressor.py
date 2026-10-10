@@ -365,18 +365,32 @@ class ContextCompressor:
         压缩攻击结果
 
         保留:
-        1. 所有成功的攻击
+        1. 所有**确认利用成功**的攻击
         2. 最近的失败攻击（有限数量）
+        3. 硬上限保护：即使全部"成功"，也不会无限增长
+
+        ⚠️ 不能用 `status == 200` 判断成功 —— 那只是"HTTP 请求成功"，
+        而实际渗透中绝大多数请求都返回 200，会导致压缩**完全失效**
+        （50 条一条裁不掉）。判据必须是真正的利用成功标志。
         """
         if not isinstance(results, list) or len(results) <= self.MAX_ATTACK_RESULTS:
             return results
 
-        successful = [r for r in results if r.get("is_exploit") or r.get("status") == 200]
-        failed = [r for r in results if not (r.get("is_exploit") or r.get("status") == 200)]
+        def _is_real_success(r: Dict) -> bool:
+            if not isinstance(r, dict):
+                return False
+            return bool(r.get("is_exploit")) or bool(r.get("vulnerable"))
 
-        # 成功的全部保留
-        # 失败的只保留最近的
+        successful = [r for r in results if _is_real_success(r)]
+        failed = [r for r in results if not _is_real_success(r)]
+
+        # 成功的全部保留，失败的只留最近的
         compressed = successful + failed[-(self.MAX_ATTACK_RESULTS - len(successful)):]
+
+        # 硬上限：即便全部是成功记录，也不能无限保留
+        hard_cap = self.MAX_ATTACK_RESULTS * 2
+        if len(compressed) > hard_cap:
+            compressed = compressed[-hard_cap:]
 
         return compressed
 

@@ -1980,6 +1980,14 @@ def attacker_node(state: CTFState) -> Dict:
     target_url = state.get("target_url", current_url)  # 原始目标URL
     log(f"⚔️ [攻击] 目标: {current_url}")
 
+    # 读取时投影：大字段（候选/攻击历史）在构造 prompt 前按价值分级裁剪。
+    # ⚠️ 这是**只读视图**，不改原 state —— 设计说明见 app/context_budget.py
+    try:
+        from context_budget import project_state
+        _view = project_state(state, purpose="attacker")
+    except Exception:
+        _view = state
+
     # 获取拓扑优先级
     topology_priority = state.get("topology_priority", [])
     priority_dict = {url: score for url, score in topology_priority}
@@ -1987,7 +1995,7 @@ def attacker_node(state: CTFState) -> Dict:
 
     # [核心修复] 获取所有漏洞候选，不再仅限当前URL
     # 因为fscan扫描出的漏洞URL可能与current_url不同
-    all_candidates = state.get("vuln_candidates", [])
+    all_candidates = _view.get("vuln_candidates", [])
 
     # 优先处理当前URL的候选，但也保留其他候选
     candidates_for_current = [c for c in all_candidates if c.get("url") == current_url]
@@ -2107,7 +2115,7 @@ def attacker_node(state: CTFState) -> Dict:
         log(f"   🎯 高优先级目标，增加攻击动作上限至 {max_actions}")
 
     # [优化] 获取最近的攻击历史，用于防止重复并引导进化
-    history = state.get("attack_results", [])[-10:]
+    history = _view.get("attack_results", [])[-10:]
 
     # 获取题目背景信息
     task_info = {
@@ -2139,6 +2147,14 @@ def attacker_node(state: CTFState) -> Dict:
         # 黑板: 注入技能库里匹配到的打法（仅启用时）
         skills=(state.get("skill_hits") or None) if config.ENABLE_BOARD else None,
     ) # 增加题目背景与战术指引
+
+    # 上下文预算：prompt 超警戒线时告警
+    # （项目此前只有事后 token 统计，没有事前检查，等超限时请求已经失败了）
+    try:
+        from context_budget import check_budget
+        check_budget(prompt, label="attacker")
+    except Exception:
+        pass
 
     try:
         response_text = llm_client.call_chat_completion(
@@ -2542,6 +2558,15 @@ def verifier_node(state: CTFState) -> Dict:
     """
     log("🔎 [核验] 分析攻击结果...")
 
+    # 读取时投影：攻击结果是 verifier prompt 的最大来源
+    # （最多 20 条 × 每条截断 6000 字符），构造前先按价值分级裁剪。
+    # ⚠️ 只读视图，不改原 state。
+    try:
+        from context_budget import project_state
+        _view = project_state(state, purpose="verifier")
+    except Exception:
+        _view = state
+
     current_url = state.get("current_url")
     node_status = state.get("node_attack_status", {})
 
@@ -2561,7 +2586,7 @@ def verifier_node(state: CTFState) -> Dict:
             }
 
     # 获取当前批次的攻击结果
-    results = state.get("attack_results", [])
+    results = _view.get("attack_results", [])
     attack_batch = state.get("attack_batch", [])
 
     # 如果无攻击动作，检查是否已触发模式切换
@@ -2652,6 +2677,13 @@ def verifier_node(state: CTFState) -> Dict:
         human_hint=human_hint,
         enable_board=config.ENABLE_BOARD,
     )
+
+    # 上下文预算检查（verifier 是 prompt 最大的节点：攻击结果最多 20×6000 字符）
+    try:
+        from context_budget import check_budget
+        check_budget(prompt, label="verifier")
+    except Exception:
+        pass
 
     response_text = llm_client.call_chat_completion(
         model=config.VERIFIER_MODEL,
@@ -3843,6 +3875,17 @@ def run_single_task(task_name: str, task_description: str, target_url: str,
                 log(f"🧠 归档到长期记忆: {_stats}")
         except Exception as _e:
             log(f"   ⚠️ 归档记忆失败（不影响结果）: {_e}")
+
+        # ── 记忆整理：长期记忆的「整理/遗忘」环节 ──
+        # 此前 compress_memory() 写了但从未被调用，导致 known_facts.md 和
+        # attack_history.json 随任务无限增长（这两个恰好是原实现里没处理的）。
+        try:
+            from memory.memory_manager import get_memory_manager
+            _cs = get_memory_manager().compress_memory()
+            if any(_cs.values()):
+                log(f"🧠 记忆整理: 精简 {sum(_cs.values())} 条 {_cs}")
+        except Exception as _e:
+            log(f"   ⚠️ 记忆整理失败（不影响结果）: {_e}")
 
         return result
 
