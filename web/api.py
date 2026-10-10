@@ -558,12 +558,24 @@ def log_callback(task_id, msg):
         task_queues[task_id].put(log_entry)
 
 
-def run_task(task_id, target_url):
-    """后台运行任务"""
+def run_task(task_id, target_url, resume=False):
+    """
+    后台运行任务
+
+    Args:
+        task_id: 任务标识。**同时作为 LangGraph 的 thread_id 来源**，
+                 保证同一任务能接上上次的检查点（断点续传）。
+        resume:  True 表示从检查点续跑，不重置状态。
+    """
     global tasks, task_logs, task_queues, task_states, task_results
 
     try:
-        from ctf_agent_graph import run_single_task, normalize_url, extract_target_info, app as ctf_app
+        from ctf_agent_graph import run_single_task, normalize_url, extract_target_info
+        from task_runtime import (bind_current_task, unbind_current_task, register_callback,
+                                  unregister_callback, clear_task)
+        from task_persistence import get_task_persistence
+
+        persistence = get_task_persistence()
 
         target_url = normalize_url(target_url)
         task_name, task_description = extract_target_info(target_url)
@@ -578,11 +590,22 @@ def run_task(task_id, target_url):
 
         # 使用线程局部存储设置当前任务ID（线程安全）
         set_current_task_id(task_id)
+        # 绑定到运行时：节点据此上报进度、响应取消
+        bind_current_task(task_id)
 
         # 初始化全局日志捕获器（如果还没初始化）
         init_log_capture()
 
-        def node_callback(node_name, state=None):
+        # ── 状态流转：DB 中标记为 running ──
+        # 原实现从不调用 update_task，导致 DB 里 status 永远停在 pending、
+        # state_snapshot 永远为空，"断点续传"实际不可用。
+        try:
+            persistence.update_task(task_id, status="running")
+        except Exception as e:
+            log_callback(task_id, f"[Warn] 状态写入失败: {e}")
+
+        def node_callback(tid, node_name, state=None):
+            """节点执行前回调（由 task_runtime.notify_node 调用）"""
             tasks[task_id]["current_node"] = node_name
             tasks[task_id]["visited_nodes"].append(node_name)
             task_states[task_id] = node_name
@@ -612,16 +635,30 @@ def run_task(task_id, target_url):
                     "ai_phase": state.get("ai_phase", ""),
                     "prompt_injection_success": state.get("prompt_injection_success", False),
                     "jailbreak_success": state.get("jailbreak_success", False),
+                    # 黑板状态（如启用）
+                    "board_summary": state.get("board_summary", ""),
+                    "facts": state.get("facts", []),
+                    "intents": state.get("intents", []),
+                    "skill_hits": state.get("skill_hits", []),
                 }
+                # 阶段性持久化（每 5 步一次，避免频繁写库影响性能）
+                steps = state.get("execution_steps", 0)
+                if steps and steps % 5 == 0:
+                    try:
+                        persistence.update_task(task_id, execution_steps=steps)
+                    except Exception:
+                        pass  # 持久化失败不影响任务执行
 
-        if not hasattr(ctf_app, '_node_callbacks'):
-            ctf_app._node_callbacks = {}
-        ctf_app._node_callbacks[task_id] = node_callback
+        register_callback(task_id, node_callback)
 
         try:
-            result = run_single_task(task_name, task_description, target_url)
+            result = run_single_task(task_name, task_description, target_url,
+                                     task_id=task_id, resume=resume)
 
-            if result.get('found_flag'):
+            if result.get('cancelled'):
+                tasks[task_id]["status"] = "cancelled"
+                log_callback(task_id, "[END] 任务已被取消")
+            elif result.get('found_flag'):
                 tasks[task_id]["status"] = "completed"
                 tasks[task_id]["found_flag"] = True
                 tasks[task_id]["final_flag"] = result.get('final_flag', result.get('found_flag'))
@@ -634,11 +671,35 @@ def run_task(task_id, target_url):
             task_results[task_id] = result
             task_completion_times[task_id] = time.time()  # 记录完成时间
 
+            # ── 状态流转：把最终状态落盘 ──
+            # 这让 DB 真实反映任务结果（此前 status 永远停在 pending），
+            # 也便于服务重启后判断哪些任务需要恢复。
+            try:
+                findings = []
+                if result.get("found_flag"):
+                    findings.append({"type": "flag",
+                                     "content": str(result.get("final_flag", ""))})
+                for cred in (result.get("credentials") or [])[:10]:
+                    findings.append({"type": "credential", "content": str(cred)[:200]})
+                persistence.update_task(
+                    task_id,
+                    status=tasks[task_id]["status"],
+                    execution_steps=result.get("execution_steps", 0),
+                    findings=findings,
+                )
+            except Exception as e:
+                log_callback(task_id, f"[Warn] 最终状态写入失败: {e}")
+
         finally:
+            # 清理运行时状态：避免内存泄漏，也防止线程被复用时串扰
+            try:
+                unregister_callback(task_id)
+                unbind_current_task()
+                clear_task(task_id)
+            except Exception:
+                pass
             # 清除当前线程的任务ID
             set_current_task_id(None)
-            if hasattr(ctf_app, '_node_callbacks') and task_id in ctf_app._node_callbacks:
-                del ctf_app._node_callbacks[task_id]
 
     except ImportError as e:
         log_callback(task_id, f"[Error] Import failed: {e}")
@@ -1049,14 +1110,112 @@ def api_task_logs(task_id):
 
 @bp.route('/api/task/<task_id>/cancel', methods=['POST'])
 def api_task_cancel(task_id):
-    """取消任务"""
+    """
+    取消任务
+
+    修复: 原实现只把字典里的 status 改成 "cancelled"，而真正执行任务的
+    `app.invoke()` 是阻塞调用、从不检查这个标志——取消形同虚设。
+    现在改为通过 task_runtime 登记取消请求，节点会在**下一个节点边界**
+    抛出 TaskCancelled 真正中断图执行。
+    """
     if task_id not in tasks:
         return jsonify({"error": "Task not found"}), 404
 
-    tasks[task_id]["status"] = "cancelled"
-    log_callback(task_id, "[System] Task cancelled by user")
+    from task_runtime import request_cancel
+    is_new = request_cancel(task_id, reason="user_requested")
 
-    return jsonify({"status": "cancelled"})
+    tasks[task_id]["status"] = "cancelling"
+    log_callback(task_id, "[System] 取消请求已提交，将在当前节点结束后生效")
+
+    return jsonify({
+        "status": "cancelling",
+        "already_pending": not is_new,
+        "note": "取消在当前节点执行完毕后生效（节点边界检查）",
+    })
+
+
+@bp.route('/api/task/<task_id>/resume', methods=['POST'])
+def api_task_resume(task_id):
+    """
+    断点续传：从上次的检查点继续执行
+
+    前提:
+      1. 启用了持久化 checkpointer（langgraph-checkpoint-sqlite）
+      2. 该任务此前确实执行过（检查点已落盘）
+    """
+    if task_id not in tasks:
+        return jsonify({"error": "Task not found"}), 404
+
+    # 已在运行的任务不允许重复启动
+    if tasks[task_id].get("status") in ("running", "pending", "cancelling"):
+        return jsonify({"error": "任务正在运行中，无需恢复"}), 409
+
+    from ctf_agent_graph import CHECKPOINT_PERSISTENT
+    if not CHECKPOINT_PERSISTENT:
+        return jsonify({
+            "error": "未启用持久化检查点，无法断点续传",
+            "hint": "pip install langgraph-checkpoint-sqlite 后重启服务",
+        }), 503
+
+    target_url = tasks[task_id].get("target_url")
+    if not target_url:
+        return jsonify({"error": "任务缺少目标 URL，无法恢复"}), 400
+
+    # 清掉可能的旧取消标志，否则恢复后会在第一个节点立刻又被取消
+    from task_runtime import clear_task
+    clear_task(task_id)
+
+    tasks[task_id]["status"] = "pending"
+    tasks[task_id]["visited_nodes"] = []
+    tasks[task_id]["progress"] = 0
+
+    thread = threading.Thread(target=run_task, args=(task_id, target_url, True))
+    thread.daemon = True
+    thread.start()
+
+    log_callback(task_id, "[System] 从检查点恢复执行")
+    return jsonify({"status": "resumed", "task_id": task_id})
+
+
+@bp.route('/api/tasks/resumable')
+def api_tasks_resumable():
+    """
+    列出可恢复的任务
+
+    判定: DB 里状态为 running/pending/paused，但内存中没有对应运行线程的任务
+    —— 这些正是上次进程退出时遗留的，可通过 /api/task/<id>/resume 续跑。
+    """
+    try:
+        from task_persistence import get_task_persistence
+        persistence = get_task_persistence()
+        records = persistence.get_active_tasks()
+    except Exception as e:
+        return jsonify({"error": f"读取任务失败: {e}"}), 500
+
+    resumable = []
+    for r in records:
+        # 内存中标记为运行中的，说明本进程正在跑它，不需要恢复
+        if tasks.get(r.task_id, {}).get("status") == "running":
+            continue
+        resumable.append({
+            "task_id": r.task_id,
+            "target": r.target,
+            "status": r.status,
+            "execution_steps": r.execution_steps,
+            "updated_at": r.to_dict().get("updated_at"),
+        })
+
+    try:
+        from ctf_agent_graph import CHECKPOINT_PERSISTENT
+        persistent = bool(CHECKPOINT_PERSISTENT)
+    except Exception:
+        persistent = False
+
+    return jsonify({
+        "resumable": resumable,
+        "count": len(resumable),
+        "checkpoint_persistent": persistent,
+    })
 
 
 @bp.route('/api/task/<task_id>/result')
@@ -2173,6 +2332,30 @@ def api_logs_node(task_id, node_name):
 if __name__ == '__main__':
     # 注册 Blueprint（确保所有路由已定义）
     app.register_blueprint(bp)
+
+    # ── 启动扫描：报告上次进程退出时遗留的未完成任务 ──
+    # 这些任务有检查点、可以续跑，是断点续传的入口
+    try:
+        from task_persistence import get_task_persistence
+        _stale = get_task_persistence().get_active_tasks()
+        if _stale:
+            print(f"[Recovery] 发现 {len(_stale)} 个未完成任务（可断点续传）:")
+            for _r in _stale[:5]:
+                print(f"           - {_r.task_id}  {_r.target}  "
+                      f"status={_r.status}  steps={_r.execution_steps}")
+            print("           恢复: POST /fisher_ctf_agent/api/task/<task_id>/resume")
+    except Exception as _e:
+        print(f"[Recovery] 启动扫描失败（不影响服务）: {_e}")
+
+    try:
+        from checkpointer import checkpoint_status
+        _cs = checkpoint_status()
+        if _cs["resumable"]:
+            print(f"[Checkpoint] 断点续传已启用: {_cs['db_path']}")
+        else:
+            print("[Checkpoint] 断点续传未启用 —— 缺少 langgraph-checkpoint-sqlite")
+    except Exception:
+        pass
 
     # 配置
     HOST = '0.0.0.0'

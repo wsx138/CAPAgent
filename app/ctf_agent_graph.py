@@ -15,6 +15,9 @@ _PROJECT_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
 if _PROJECT_ROOT not in _sys.path:
     _sys.path.insert(0, _PROJECT_ROOT)
 
+# 任务运行时：节点进度上报 + 取消响应（断点续传的配套基础设施）
+from task_runtime import TaskCancelled, notify_node, check_cancelled
+
 import argparse
 import re
 import hashlib
@@ -3507,8 +3510,14 @@ if AI_SECURITY_AVAILABLE:
         lambda s: "verifier" if s.get("potential_flags") else "mode_manager",
         {"verifier": "verifier", "mode_manager": "mode_manager"})
 
-# 编译图 - 启用内存检查点用于状态持久化
-checkpointer = MemorySaver()
+# 编译图 - 启用**持久化**检查点，支持断点续传
+#
+# 原实现用 MemorySaver（纯内存，进程退出即丢失），因此任务一旦中断只能从头再来。
+# 现改为优先 SQLite 落盘；若缺 langgraph-checkpoint-sqlite 包则自动降级为内存
+# 并打印告警——不因一个可选包让整个系统起不来。
+from checkpointer import create_checkpointer
+
+checkpointer, CHECKPOINT_PERSISTENT = create_checkpointer()
 app = workflow.compile(checkpointer=checkpointer)
 
 
@@ -3776,26 +3785,50 @@ def main():
                 return
 
 
-def run_single_task(task_name: str, task_description: str, target_url: str) -> dict:
-    """运行单个CTF任务"""
+def run_single_task(task_name: str, task_description: str, target_url: str,
+                    task_id: str = None, resume: bool = False) -> dict:
+    """
+    运行单个 CTF 任务
+
+    Args:
+        task_id: 任务标识。**必须稳定** —— 它是 LangGraph thread_id 的来源，
+                 同一个 task_id 才能接上上次的检查点。
+                 不传时退化为时间戳（一次性执行，无法续跑）。
+        resume:  True 表示从上次检查点继续，不重置状态。
+
+    Returns:
+        最终状态字典
+    """
     # 重置路由守卫，避免上一个任务的状态影响
     from router import reset_route_guard
     reset_route_guard()
 
-    # 使用统一的默认状态生成器，确保字段同步
-    from state_v2 import get_default_state
-    initial_state: CTFState = get_default_state(task_name, task_description, target_url)
-
-    # 运行工作流
-    log("\n⏳ 开始攻击...")
+    # thread_id 必须稳定：原实现用 int(time.time())，每次都是新会话、
+    # 永远接不上检查点，断点续传因此无从谈起。
+    thread_key = str(task_id) if task_id else str(int(time.time()))
     config_params = {
-        "configurable": {"thread_id": f"ctf_task_{int(time.time())}"},
+        "configurable": {"thread_id": f"ctf_task_{thread_key}"},
         "recursion_limit": 500
     }
 
+    log("\n⏳ 开始攻击...")
+
     try:
-        result = app.invoke(initial_state, config=config_params)
+        if resume:
+            # 传 None = "从最后一个检查点继续"，这是 LangGraph 的标准续跑语义
+            log(f"♻️ 从检查点恢复执行 (thread=ctf_task_{thread_key})")
+            result = app.invoke(None, config=config_params)
+        else:
+            from state_v2 import get_default_state
+            initial_state: CTFState = get_default_state(task_name, task_description, target_url)
+            result = app.invoke(initial_state, config=config_params)
         return result
+
+    except TaskCancelled:
+        # 用户在节点边界请求取消——这是正常流程，不是错误
+        log("⏹️ 任务已被取消")
+        return {"current_mode": "cancelled", "found_flag": False, "cancelled": True}
+
     except Exception as e:
         import traceback
         log(f"❌ 工作流执行异常: {e}")

@@ -293,6 +293,20 @@ def create_disabled_wrapper(node_name: str, node_func: Callable) -> Callable:
                 }]
             }
 
+        # ── 任务运行时钩子 ────────────────────────────────────────────
+        # ① 取消检查：每个节点边界检查一次取消标志，若已取消则抛
+        #    TaskCancelled 中断整个图。原实现只改字典标志、从不检查，
+        #    导致 /api/task/<id>/cancel 形同虚设。
+        # ② 进度上报：让 web 层注册的 node_callback 真正被调用
+        #    （此前 _node_callbacks 从未被消费，UI 拿不到中间状态）。
+        try:
+            from task_runtime import check_cancelled, notify_node
+            check_cancelled()
+            notify_node(node_name, state)
+        except ImportError:
+            pass  # 运行时模块不可用时保持原行为
+        # TaskCancelled 不在此捕获——需要向上传播以中断图执行
+
         # 使用性能监控跟踪节点执行
         try:
             from performance import performance_monitor
