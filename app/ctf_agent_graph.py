@@ -3821,7 +3821,29 @@ def run_single_task(task_name: str, task_description: str, target_url: str,
         else:
             from state_v2 import get_default_state
             initial_state: CTFState = get_default_state(task_name, task_description, target_url)
+
+            # 长期记忆：载入该目标的历史发现作为起点（跨任务）
+            # 只在**新任务**时做——resume 时 state 已在检查点里，重复载入会污染
+            try:
+                from memory_bridge import load_prior_knowledge
+                _prior = load_prior_knowledge(target_url)
+                if _prior:
+                    initial_state["facts"] = _prior
+                    log(f"🧠 载入 {len(_prior)} 条历史记忆（来自过往任务）")
+            except Exception as _e:
+                log(f"   ⚠️ 载入历史记忆失败（不影响执行）: {_e}")
+
             result = app.invoke(initial_state, config=config_params)
+
+        # ── 归档：把本次的黑板事实写入长期记忆，供下次同类目标复用 ──
+        try:
+            from memory_bridge import archive_board
+            _stats = archive_board(result, target_url)
+            if any(_stats.values()):
+                log(f"🧠 归档到长期记忆: {_stats}")
+        except Exception as _e:
+            log(f"   ⚠️ 归档记忆失败（不影响结果）: {_e}")
+
         return result
 
     except TaskCancelled:
